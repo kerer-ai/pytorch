@@ -2,12 +2,11 @@
 """
 Run a shard of patched upstream PyTorch tests via direct pytest execution.
 
-Shard allocation by test type:
-- Shard 1-50: Distributed tests, 50 machines (linux-aarch64-a3-2, 2 parallel workers)
-- Shard 51: Tests excluded by discover_tests.py (blocklisted patterns/tests), 1 machine (linux-aarch64-a3-2, 2 parallel workers)
-- Shard 52-101: Regular tests, 50 machines (linux-aarch64-a3-2, 2 parallel workers)
+Test types:
+- Distributed tests: NPU distributed tests (run with per-file isolation for crash safety)
+- Regular tests: All other tests (run with parallel workers for speed)
 
-Each shard type applies whitelist/blacklist filtering from case_paths_ci.yml
+Each shard applies whitelist/blacklist filtering from case_paths_ci.yml
 and item-level deselection from disabled_testcases.json.
 
 Tests are executed using direct pytest with pytest-xdist for file-level
@@ -31,19 +30,6 @@ from time import monotonic
 from typing import Dict, List, Tuple
 import threading
 
-
-# Shard type constants (for reference, actual shard count is passed via --num-shards)
-# Distributed tests: shard 1-50 (50 shards, serial execution for crash isolation)
-SHARD_DISTRIBUTED_START = 1
-SHARD_DISTRIBUTED_END = 50
-SHARD_DISTRIBUTED_TOTAL = 50
-
-# Regular tests: shard 51-110 (60 shards, parallel execution with 2 workers)
-SHARD_REGULAR_START = 51
-SHARD_REGULAR_END = 110
-SHARD_REGULAR_TOTAL = 60
-
-TOTAL_SHARDS = 110
 
 # Test files that should never be run in parallel with other test files.
 # Borrowed from PyTorch's run_test.py RUN_PARALLEL_BLOCKLIST + CI_SERIAL_LIST.
@@ -174,22 +160,6 @@ def path_matches_excluded_pattern(path: str) -> bool:
             if path.startswith(pattern + '/'):
                 return True
     return False
-
-
-def get_shard_type(shard: int) -> Tuple[str, int, int]:
-    """
-    Determine shard type and sub-index based on shard number.
-
-    Returns:
-        Tuple of (shard_type, shard_index, shard_total)
-        - shard_type: "distributed" or "regular"
-        - shard_index: Index within the shard type (1-indexed)
-        - shard_total: Total number of shards for this type
-    """
-    if SHARD_DISTRIBUTED_START <= shard <= SHARD_DISTRIBUTED_END:
-        return ("distributed", shard - SHARD_DISTRIBUTED_START + 1, SHARD_DISTRIBUTED_TOTAL)
-    else:
-        return ("regular", shard - SHARD_REGULAR_START + 1, SHARD_REGULAR_TOTAL)
 
 
 def parse_args():
@@ -699,55 +669,55 @@ def finalize_stats(base_stats: Dict, returncode: int, duration: float, error_mes
     return stats
 
 
-def save_stats_file(report_dir: str, shard: int, stats: Dict) -> str:
+def save_stats_file(report_dir: str, shard: int, stats: Dict, shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    stats_file = os.path.join(report_dir, f"shard_{shard}_stats.json")
+    stats_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_stats.json")
     with open(stats_file, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2)
     return stats_file
 
 
-def save_info_file(report_dir: str, shard: int, info: Dict) -> str:
+def save_info_file(report_dir: str, shard: int, info: Dict, shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    info_file = os.path.join(report_dir, f"shard_{shard}_info.json")
+    info_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_info.json")
     with open(info_file, "w", encoding="utf-8") as f:
         json.dump(info, f, indent=2)
     return info_file
 
 
-def save_test_plan_file(report_dir: str, shard: int, planned_tests: List[str]) -> str:
+def save_test_plan_file(report_dir: str, shard: int, planned_tests: List[str], shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    plan_file = os.path.join(report_dir, f"shard_{shard}_planned_test_files.txt")
+    plan_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_planned_test_files.txt")
     with open(plan_file, "w", encoding="utf-8") as f:
         for target in planned_tests:
             f.write(f"{target}\n")
     return plan_file
 
 
-def save_excluded_test_files_file(report_dir: str, shard: int, test_targets: List[str]) -> str:
+def save_excluded_test_files_file(report_dir: str, shard: int, test_targets: List[str], shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    excluded_file = os.path.join(report_dir, f"shard_{shard}_excluded_test_files.txt")
+    excluded_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_excluded_test_files.txt")
     with open(excluded_file, "w", encoding="utf-8") as f:
         for target in test_targets:
             f.write(f"{target}\n")
     return excluded_file
 
 
-def save_unhandled_upstream_tests_file(report_dir: str, shard: int, test_targets: List[str]) -> str:
+def save_unhandled_upstream_tests_file(report_dir: str, shard: int, test_targets: List[str], shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    unhandled_file = os.path.join(report_dir, f"shard_{shard}_unhandled_upstream_tests.txt")
+    unhandled_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_unhandled_upstream_tests.txt")
     with open(unhandled_file, "w", encoding="utf-8") as f:
         for target in test_targets:
             f.write(f"{target}\n")
     return unhandled_file
 
 
-def get_disabled_testcases_report_file(report_dir: str, shard: int) -> str:
-    return os.path.join(report_dir, f"shard_{shard}_disabled_testcases.json")
+def get_disabled_testcases_report_file(report_dir: str, shard: int, shard_type: str = "regular") -> str:
+    return os.path.join(report_dir, f"shard_{shard_type}-{shard}_disabled_testcases.json")
 
 
-def load_disabled_testcases_report(report_dir: str, shard: int) -> Dict:
-    report_file = get_disabled_testcases_report_file(report_dir, shard)
+def load_disabled_testcases_report(report_dir: str, shard: int, shard_type: str = "regular") -> Dict:
+    report_file = get_disabled_testcases_report_file(report_dir, shard, shard_type)
     if not os.path.exists(report_file):
         return {
             "disabled_count_matched": 0,
@@ -769,9 +739,9 @@ def load_disabled_testcases_report(report_dir: str, shard: int) -> Dict:
         }
 
 
-def print_stats_summary(shard: int, stats: Dict) -> None:
+def print_stats_summary(shard: int, stats: Dict, shard_type: str = "regular") -> None:
     print(f"\n{'=' * 60}")
-    print(f"Test Results for Shard {shard}")
+    print(f"Test Results for Shard {shard_type}-{shard}")
     print(f"{'=' * 60}")
     print(f"Total:  {stats['total']}")
     print(f"Passed: {stats['passed']}")
@@ -843,8 +813,8 @@ def remove_existing_file(path: Path) -> None:
     path.unlink(missing_ok=True)
 
 
-def get_shard_log_file(report_dir: Path, shard: int) -> Path:
-    return report_dir / f"test_shard_{shard}.log"
+def get_shard_log_file(report_dir: Path, shard: int, shard_type: str = "regular") -> Path:
+    return report_dir / f"test_shard_{shard_type}-{shard}.log"
 
 
 def run_command_with_tee(command: List[str], cwd: Path, env: Dict[str, str], log_file: Path) -> int:
@@ -938,7 +908,7 @@ def build_pytest_command(
     Returns:
         Command list for subprocess execution
     """
-    xml_file = report_dir / f"shard_{shard}_pytest{xml_suffix}.xml"
+    xml_file = report_dir / f"shard_{shard_type}-{shard}_pytest{xml_suffix}.xml"
     command = [
         sys.executable,
         "-m",
@@ -1021,7 +991,7 @@ def run_tests_via_pytest(
         missing_files: List of test files that crashed and didn't generate XML report
     """
     start = monotonic()
-    log_file = get_shard_log_file(report_dir, shard)
+    log_file = get_shard_log_file(report_dir, shard, shard_type)
 
     merged_env = os.environ.copy()
     merged_env.update(env_updates)
@@ -1068,7 +1038,7 @@ def run_tests_via_pytest(
                 """
                 test_name = strip_test_prefix_and_suffix(test_file)
                 safe_name = test_name.replace("/", "_")
-                expected_xml = report_dir / f"shard_{shard}_pytest_{safe_name}.xml"
+                expected_xml = report_dir / f"shard_{shard_type}-{shard}_pytest_{safe_name}.xml"
 
                 command = build_pytest_command(
                     [test_file],
@@ -1082,7 +1052,7 @@ def run_tests_via_pytest(
                 )
 
                 # Write per-file log to separate file for isolation
-                file_log_path = report_dir / f"shard_{shard}_log_{safe_name}.txt"
+                file_log_path = report_dir / f"shard_{shard_type}-{shard}_log_{safe_name}.txt"
 
                 with log_lock:
                     log_handle.write(f"\n[File {idx}/{len(planned_tests)}] {test_name}\n")
@@ -1128,7 +1098,7 @@ def run_tests_via_pytest(
                 for future in as_completed(futures):
                     test_file, rc, xml_generated, test_name = future.result()
                     executed_files[test_file] = {
-                        "xml_expected": report_dir / f"shard_{shard}_pytest_{test_name.replace('/', '_')}.xml",
+                        "xml_expected": report_dir / f"shard_{shard_type}-{shard}_pytest_{test_name.replace('/', '_')}.xml",
                         "xml_generated": xml_generated,
                         "returncode": rc,
                         "test_name": test_name,
@@ -1148,7 +1118,7 @@ def run_tests_via_pytest(
                     test_name = strip_test_prefix_and_suffix(test_file)
                     # Sanitize test_name for use in filename (replace / with _)
                     safe_name = test_name.replace("/", "_")
-                    expected_xml = report_dir / f"shard_{shard}_pytest_{safe_name}.xml"
+                    expected_xml = report_dir / f"shard_{shard_type}-{shard}_pytest_{safe_name}.xml"
 
                     executed_files[test_file] = {
                         "xml_expected": expected_xml,
@@ -1206,7 +1176,7 @@ def run_tests_via_pytest(
 
                 # For parallel tests, we don't have per-file XML tracking
                 # The single XML covers all parallel tests
-                parallel_xml = report_dir / f"shard_{shard}_pytest.xml"
+                parallel_xml = report_dir / f"shard_{shard_type}-{shard}_pytest.xml"
                 for test_file in parallel_tests:
                     executed_files[test_file] = {
                         "xml_expected": parallel_xml,
@@ -1223,14 +1193,14 @@ def run_tests_via_pytest(
 
     # Save missing files list for summary script
     if missing_files:
-        missing_file_path = report_dir / f"shard_{shard}_missing_files.txt"
+        missing_file_path = report_dir / f"shard_{shard_type}-{shard}_missing_files.txt"
         with missing_file_path.open("w", encoding="utf-8") as f:
             for test_file in missing_files:
                 f.write(f"{test_file}\n")
         print(f"\nWarning: {len(missing_files)} files did not generate XML reports (likely crashed)")
 
     # --- Aggregate stats from all generated XML files ---
-    xml_files = sorted(report_dir.glob(f"shard_{shard}_pytest*.xml"))
+    xml_files = sorted(report_dir.glob(f"shard_{shard_type}-{shard}_pytest*.xml"))
     stats = aggregate_junit_stats([report_dir])
     stats["junit_generated"] = bool(xml_files)
     stats["junit_xml_files"] = len(xml_files)
@@ -1427,9 +1397,9 @@ def main():
     info["excluded_test_files"] = len(excluded_test_files)
     info["shard_files"] = len(planned_tests)
 
-    save_test_plan_file(str(report_dir), args.shard, planned_tests)
-    save_excluded_test_files_file(str(report_dir), args.shard, excluded_test_files)
-    save_unhandled_upstream_tests_file(str(report_dir), args.shard, [])
+    save_test_plan_file(str(report_dir), args.shard, planned_tests, shard_type)
+    save_excluded_test_files_file(str(report_dir), args.shard, excluded_test_files, shard_type)
+    save_unhandled_upstream_tests_file(str(report_dir), args.shard, [], shard_type)
 
     print(f"\n{'=' * 60}")
     print("PyTorch NPU Test Runner (direct pytest)")
@@ -1469,35 +1439,44 @@ def main():
         print(f"  [{index:03d}] {display_name}")
 
     clean_existing_junit_xml(report_dir)
-    remove_existing_file(Path(get_disabled_testcases_report_file(str(report_dir), args.shard)))
-    remove_existing_file(get_shard_log_file(report_dir, args.shard))
+    remove_existing_file(Path(get_disabled_testcases_report_file(str(report_dir), args.shard, shard_type)))
+    remove_existing_file(get_shard_log_file(report_dir, args.shard, shard_type))
 
     env_updates = build_execution_env(test_dir, script_dir, args.disabled_testcases, str(report_dir), args.shard)
 
     missing_files = []
     if planned_tests:
         # Auto-select execution strategy based on test type:
-        # - distributed: per-file isolation with serial execution (parallel=1) for crash safety
-        # - regular: normal execution with parallel workers (parallel=2) for speed
+        # - distributed: per-file isolation for crash safety (unless user explicitly disables)
+        # - regular: normal execution with parallel workers for speed
         # User can override with --per-file-isolation and --parallel flags
         auto_per_file_isolation = args.per_file_isolation
         auto_parallel = args.parallel
 
         # Default strategy: distributed tests use serial per-file isolation, regular tests use parallel
         if shard_type == "distributed":
-            # Distributed tests often cause NPU kernel crashes, use serial execution for isolation
-            # unless user explicitly sets different parameters
-            if not args.per_file_isolation and args.parallel == 2:  # Default values, auto-switch
+            # Distributed tests often cause NPU kernel crashes, use per-file isolation for safety
+            # unless user explicitly sets --per-file-isolation=False (which is not possible via CLI,
+            # so we always enable it for distributed tests for crash safety)
+            if not args.per_file_isolation:
                 auto_per_file_isolation = True
-                auto_parallel = 1  # Serial execution (one file at a time)
-                print(f"Note: Distributed tests auto-switched to PER-FILE ISOLATION (serial execution)")
-                print("      This prevents NPU kernel crashes from affecting other test files")
-                print("      Use --parallel N to run N files concurrently in isolation mode")
+                # Use user's parallel setting for concurrent isolated execution,
+                # or default to serial (parallel=1) for maximum safety
+                if args.parallel <= 1:
+                    auto_parallel = 1  # Serial execution (one file at a time)
+                    print(f"Note: Distributed tests auto-switched to PER-FILE ISOLATION (serial execution)")
+                    print("      This prevents NPU kernel crashes from affecting other test files")
+                else:
+                    # User specified parallel > 1, use it for concurrent isolated execution
+                    auto_parallel = args.parallel
+                    print(f"Note: Distributed tests auto-switched to PER-FILE ISOLATION mode")
+                    print(f"      Running {auto_parallel} files concurrently in isolation")
+                print("      Use --parallel 1 to force serial execution, or --per-file-isolation is always enabled for distributed")
             elif args.per_file_isolation and args.parallel > 1:
                 print(f"Note: Running {len(planned_tests)} distributed tests in PER-FILE ISOLATION mode")
                 print(f"      with {auto_parallel} parallel workers (crash isolation + concurrency)")
             else:
-                print(f"Note: Running {len(planned_tests)} distributed tests via direct pytest")
+                print(f"Note: Running {len(planned_tests)} distributed tests via direct pytest with per-file isolation")
         else:
             # Regular tests: use normal parallel execution (faster, less crash-prone)
             print(f"Note: Running {len(planned_tests)} {shard_type} tests via direct pytest (parallel: {auto_parallel})")
@@ -1534,11 +1513,11 @@ def main():
     info["startup_failures"] = int(log_metrics.get("startup_failures", 0))
     info["import_failures"] = int(log_metrics.get("import_failures", 0))
     info["test_failures"] = int(log_metrics.get("test_failures", 0))
-    info.update(load_disabled_testcases_report(str(report_dir), args.shard))
+    info.update(load_disabled_testcases_report(str(report_dir), args.shard, shard_type))
 
-    save_info_file(str(report_dir), args.shard, info)
-    save_stats_file(str(report_dir), args.shard, stats)
-    print_stats_summary(args.shard, stats)
+    save_info_file(str(report_dir), args.shard, info, shard_type)
+    save_stats_file(str(report_dir), args.shard, stats, shard_type)
+    print_stats_summary(args.shard, stats, shard_type)
     sys.exit(stats.get("returncode", 1))
 
 

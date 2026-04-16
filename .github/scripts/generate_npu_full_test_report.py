@@ -5,6 +5,7 @@ Generate a consolidated markdown/json report for the NPU full test workflow.
 
 import argparse
 import json
+import re
 import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
@@ -122,16 +123,21 @@ def extract_test_identifier(test_path: str) -> str:
 
 
 def aggregate_testsuite_stats_for_shard(
-    reports_root: Path, shard: int, planned_files: List[str], missing_files_list: List[str] = None
+    reports_root: Path,
+    shard_type: str,
+    shard: int,
+    planned_files: List[str],
+    missing_files_list: List[str] = None
 ) -> List[Dict]:
     """
     Aggregate all testsuite statistics for a specific shard.
 
-    The test execution generates XML files named `shard_{shard}_pytest*.xml`.
+    The test execution generates XML files named `shard_{type}-{shard}_pytest*.xml`.
     Each XML file contains testcases with `file` attribute indicating the test file.
 
     Args:
         reports_root: Root directory containing all merged report files
+        shard_type: Shard type ("distributed" or "regular")
         shard: Shard number to aggregate for
         planned_files: List of test file paths planned for this shard
         missing_files_list: List of test file paths that crashed and didn't generate XML
@@ -159,8 +165,11 @@ def aggregate_testsuite_stats_for_shard(
         name = Path(planned).name.replace(".py", "")
         planned_test_names.add(name)
 
-    # Find all XML files for this shard: shard_{shard}_pytest*.xml
-    for xml_path in reports_root.glob(f"shard_{shard}_pytest*.xml"):
+    # Convert shard_type to file prefix ("distributed" -> "dist", "regular" -> "reg")
+    type_prefix = "dist" if shard_type == "distributed" else "reg"
+
+    # Find all XML files for this shard: shard_{type}-{shard}_pytest*.xml
+    for xml_path in reports_root.glob(f"shard_{type_prefix}-{shard}_pytest*.xml"):
         # Parse testcase elements and aggregate by file attribute
         test_file_stats = aggregate_testcases_by_file(xml_path, planned_identifiers, planned_test_names)
         for test_id, stats in test_file_stats.items():
@@ -356,7 +365,16 @@ def aggregate_testcases_by_file(xml_path: Path, planned_identifiers: set, planne
     return result
 
 
-def parse_requested_shards(raw: str) -> List[int]:
+def parse_requested_shards(raw: str) -> List[Tuple[str, int]]:
+    """
+    Parse shard identifiers from JSON array.
+
+    Supports formats:
+    - Integers: [1, 2, 3] -> [("regular", 1), ("regular", 2), ("regular", 3)]
+    - Type-prefixed: ["dist-1", "reg-2"] -> [("distributed", 1), ("regular", 2)]
+
+    Returns list of (shard_type, shard_number) tuples.
+    """
     try:
         value = json.loads(raw)
     except json.JSONDecodeError:
@@ -368,10 +386,30 @@ def parse_requested_shards(raw: str) -> List[int]:
     result = []
     for item in value:
         try:
-            result.append(int(item))
+            if isinstance(item, str):
+                # Parse type-prefixed format: "dist-1", "reg-2"
+                if "-" in item:
+                    type_prefix, num_str = item.split("-", 1)
+                    if type_prefix == "dist":
+                        shard_type = "distributed"
+                    elif type_prefix == "reg":
+                        shard_type = "regular"
+                    else:
+                        # Unknown prefix, skip
+                        continue
+                    shard_num = int(num_str)
+                    result.append((shard_type, shard_num))
+                else:
+                    # String without prefix, try to parse as int
+                    shard_num = int(item)
+                    result.append(("regular", shard_num))
+            elif isinstance(item, int):
+                # Plain integer, assume "regular" type
+                result.append(("regular", item))
         except (TypeError, ValueError):
             continue
-    return sorted(set(result))
+    # Sort by type then number
+    return sorted(set(result), key=lambda x: (x[0], x[1]))
 
 
 def parse_expected_special_tests(raw: str) -> List[str]:
@@ -424,7 +462,25 @@ def get_unhandled_special_tests(info: Dict) -> int:
 
 def discover_shard_files(
     reports_root: Path,
-) -> Tuple[Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path]]:
+) -> Tuple[
+    Dict[Tuple[str, int], Path],  # stats_files
+    Dict[Tuple[str, int], Path],  # info_files
+    Dict[Tuple[str, int], Path],  # plan_files
+    Dict[Tuple[str, int], Path],  # excluded_files
+    Dict[Tuple[str, int], Path],  # unhandled_files
+    Dict[Tuple[str, int], Path],  # xml_files
+    Dict[Tuple[str, int], Path],  # missing_files
+]:
+    """
+    Discover all shard report files in the reports directory.
+
+    Returns dicts keyed by (shard_type, shard_number) tuples.
+
+    File name format: shard_{type}-{number}_{suffix}
+    Examples:
+    - shard_dist-1_stats.json
+    - shard_reg-1_info.json
+    """
     stats_files = {}
     info_files = {}
     plan_files = {}
@@ -433,56 +489,70 @@ def discover_shard_files(
     xml_files = {}
     missing_files = {}
 
+    def parse_shard_filename(path: Path, suffix_pattern: str) -> Tuple[str, int]:
+        """
+        Parse shard type and number from filename.
+
+        Filename format: shard_{type}-{number}_{suffix}
+        e.g., shard_dist-1_stats.json -> ("distributed", 1)
+        e.g., shard_reg-2_planned_test_files.txt -> ("regular", 2)
+        """
+        stem = path.stem  # filename without extension
+        # Match pattern: shard_{type}-{number}_{suffix}
+        match = re.match(r"shard_(dist|reg)-(\d+)_" + suffix_pattern, stem)
+        if match:
+            type_prefix = match.group(1)
+            shard_num = int(match.group(2))
+            if type_prefix == "dist":
+                return ("distributed", shard_num)
+            elif type_prefix == "reg":
+                return ("regular", shard_num)
+        return None
+
     for path in reports_root.rglob("shard_*_stats.json"):
-        try:
-            shard = int(path.stem.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        stats_files[shard] = path
+        key = parse_shard_filename(path, "stats")
+        if key:
+            stats_files[key] = path
 
     for path in reports_root.rglob("shard_*_info.json"):
-        try:
-            shard = int(path.stem.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        info_files[shard] = path
+        key = parse_shard_filename(path, "info")
+        if key:
+            info_files[key] = path
 
     for path in reports_root.rglob("shard_*_planned_test_files.txt"):
-        try:
-            shard = int(path.stem.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        plan_files[shard] = path
+        key = parse_shard_filename(path, "planned_test_files")
+        if key:
+            plan_files[key] = path
 
     for path in reports_root.rglob("shard_*_excluded_test_files.txt"):
-        try:
-            shard = int(path.stem.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        excluded_files[shard] = path
+        key = parse_shard_filename(path, "excluded_test_files")
+        if key:
+            excluded_files[key] = path
 
     for path in reports_root.rglob("shard_*_unhandled_upstream_tests.txt"):
-        try:
-            shard = int(path.stem.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        unhandled_files[shard] = path
+        key = parse_shard_filename(path, "unhandled_upstream_tests")
+        if key:
+            unhandled_files[key] = path
 
     # Discover XML files for per-test-file statistics
     for path in reports_root.rglob("shard_*_pytest*.xml"):
-        try:
-            shard = int(path.stem.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        xml_files[shard] = path
+        # XML filename: shard_{type}-{number}_pytest{suffix}.xml
+        stem = path.stem
+        match = re.match(r"shard_(dist|reg)-(\d+)_pytest", stem)
+        if match:
+            type_prefix = match.group(1)
+            shard_num = int(match.group(2))
+            if type_prefix == "dist":
+                key = ("distributed", shard_num)
+            elif type_prefix == "reg":
+                key = ("regular", shard_num)
+            xml_files[key] = path
 
     # Discover missing files list (files that crashed and didn't generate XML)
     for path in reports_root.rglob("shard_*_missing_files.txt"):
-        try:
-            shard = int(path.stem.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        missing_files[shard] = path
+        key = parse_shard_filename(path, "missing_files")
+        if key:
+            missing_files[key] = path
 
     return stats_files, info_files, plan_files, excluded_files, unhandled_files, xml_files, missing_files
 
@@ -568,18 +638,21 @@ def format_testsuite_detail(stats: Dict) -> str:
     skipped = stats.get("skipped", 0)
     time = stats.get("time", 0.0)
 
-    parts = [name]
+    # Build stats parts (comma-separated)
+    stats_parts = []
     if passed > 0:
-        parts.append(f"{passed} passed")
+        stats_parts.append(f"{passed} passed")
     if failures > 0:
-        parts.append(f"{failures} failed")
+        stats_parts.append(f"{failures} failed")
     if errors > 0:
-        parts.append(f"{errors} error")
+        stats_parts.append(f"{errors} error")
     if skipped > 0:
-        parts.append(f"{skipped} skipped")
-    parts.append(format_duration_short(time))
+        stats_parts.append(f"{skipped} skipped")
+    stats_parts.append(format_duration_short(time))
 
-    return ": ".join(parts)
+    # Format: "name: stats1, stats2, ..."
+    stats_str = ", ".join(stats_parts)
+    return f"{name}: {stats_str}"
 
 
 def format_duration_short(seconds: float) -> str:
@@ -688,13 +761,14 @@ def main():
     unique_missing_files = set()
     selection_modes = set()
 
-    for shard in shard_ids:
-        stats_path = stats_files.get(shard)
-        info_path = info_files.get(shard)
-        plan_path = plan_files.get(shard)
-        excluded_path = excluded_files.get(shard)
-        unhandled_path = unhandled_files.get(shard)
-        missing_path = missing_files_paths.get(shard)
+    for shard_type, shard_num in shard_ids:
+        shard_key = (shard_type, shard_num)
+        stats_path = stats_files.get(shard_key)
+        info_path = info_files.get(shard_key)
+        plan_path = plan_files.get(shard_key)
+        excluded_path = excluded_files.get(shard_key)
+        unhandled_path = unhandled_files.get(shard_key)
+        missing_path = missing_files_paths.get(shard_key)
         stats = load_json_file(stats_path) if stats_path else {}
         info = load_json_file(info_path) if info_path else {}
         selected_test_entries = get_selected_test_entries(info)
@@ -711,7 +785,7 @@ def main():
         # This includes Phase 1 (run_test.py) and Phase 2 (pytest fallback) results
         # Filter by planned test files to ensure we only include tests for this shard
         # Include missing files that crashed without generating reports
-        testsuite_stats = aggregate_testsuite_stats_for_shard(reports_root, shard, planned_files, missing_files_list)
+        testsuite_stats = aggregate_testsuite_stats_for_shard(reports_root, shard_type, shard_num, planned_files, missing_files_list)
 
         # If testsuite_stats has entries, aggregate their totals and override incomplete status
         has_phase1_xmls = len(testsuite_stats) > 0
@@ -776,7 +850,9 @@ def main():
 
         shard_rows.append(
             {
-                "shard": shard,
+                "shard": f"{shard_type[:4]}-{shard_num}",  # "dist-1" or "reg-1"
+                "shard_type": shard_type,
+                "shard_num": shard_num,
                 "status": status,
                 "total": int(stats.get("total", 0)),
                 "passed": int(stats.get("passed", 0)),
@@ -820,7 +896,7 @@ def main():
     include_unhandled_tests = bool(unhandled_tests_list)
 
     # Show all shards in the detail table
-    sorted_shards = sorted(shard_rows, key=lambda row: row["shard"])
+    sorted_shards = sorted(shard_rows, key=lambda row: (row["shard_type"], row["shard_num"]))
     slowest = sorted(shard_rows, key=lambda row: row["duration"], reverse=True)[:20]
     special_test_names = expected_special_tests or sorted(special_test_files)
     special_test_rows = []

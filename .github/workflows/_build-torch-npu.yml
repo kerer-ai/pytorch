@@ -28,12 +28,12 @@ on:
         description: Build status (0 for success, non-zero for failure)
         value: ${{ jobs.build_torch_npu.outputs.status }}
 
-env:
-  DOCKER_IMAGE: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/manylinux2_28_aarch64-builder:npu-20241225
-
 jobs:
   build_torch_npu:
     runs-on: linux-aarch64-a3-2
+    # NOTE: container.image cannot reference env variables in GitHub Actions.
+    # The DOCKER_IMAGE env below is used for Build Summary display.
+    # When updating the image, update BOTH container.image AND env.DOCKER_IMAGE.
     container:
       image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/manylinux2_28_aarch64-builder:npu-20241225
       options: --user root
@@ -41,6 +41,7 @@ jobs:
       wheel: ${{ steps.build.outputs.wheel }}
       status: ${{ steps.build.outputs.status }}
     env:
+      DOCKER_IMAGE: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/manylinux2_28_aarch64-builder:npu-20241225
       PYTHON_VERSION: ${{ inputs.python_version }}
 
     steps:

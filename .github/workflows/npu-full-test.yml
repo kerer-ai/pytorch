@@ -2,6 +2,10 @@ name: PyTorch NPU Full Test (v2.7.1)
 
 on:
   push:
+    branches:
+      - main
+      - master
+      - 'release/**'
     paths:
       - '.github/workflows/npu-full-test.yml'
       - '.github/workflows/_build-torch-npu.yml'
@@ -94,9 +98,19 @@ jobs:
         run: |
           cd pytorch-test-src/test_upstream
           chmod +x apply_patch.sh
+          # Count patch files before applying
+          PATCH_COUNT=$(find . -name "*.patch" -o -name "*.diff" | wc -l)
+          echo "Found ${PATCH_COUNT} patch files"
           ./apply_patch.sh 2>&1 | tee /tmp/patch.log
-          PATCH_COUNT=$(grep -c "成功" /tmp/patch.log || echo "0")
+          APPLY_STATUS=$?
+          # Use patch file count as the metric (more reliable than grep Chinese output)
           echo "patch_count=${PATCH_COUNT}" >> $GITHUB_OUTPUT
+          echo "apply_status=${APPLY_STATUS}" >> $GITHUB_OUTPUT
+          # Fail if apply_patch.sh returned non-zero
+          if [ ${APPLY_STATUS} -ne 0 ]; then
+            echo "Patch application failed!"
+            exit 1
+          fi
 
       - name: Package prepared test source
         run: |
@@ -145,7 +159,7 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # Distributed Tests: linux-aarch64-a3-8 runner, serial execution, 50 shards
+  # Distributed Tests: linux-aarch64-a3-8 runner, serial execution, default 10 shards
   # ============================================================================
   test_distributed:
     needs:
@@ -299,7 +313,7 @@ jobs:
           if-no-files-found: warn
 
   # ============================================================================
-  # Regular Tests: linux-aarch64-a3-2 runner, parallel=2, 60 shards
+  # Regular Tests: linux-aarch64-a3-2 runner, parallel=2, default 40 shards
   # ============================================================================
   test_regular:
     needs:
