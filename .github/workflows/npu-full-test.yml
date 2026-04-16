@@ -22,14 +22,14 @@ on:
   workflow_dispatch:
     inputs:
       distributed_shards:
-        description: 'Number of shards for distributed tests (default 1 for validation)'
+        description: 'Number of shards for distributed tests (default 10)'
         required: false
-        default: '1'
+        default: '10'
         type: string
       regular_shards:
-        description: 'Number of shards for regular tests (default 1 for validation)'
+        description: 'Number of shards for regular tests (default 40)'
         required: false
-        default: '1'
+        default: '40'
         type: string
 
 env:
@@ -61,9 +61,9 @@ jobs:
       - name: Set shard matrices
         id: set_matrix
         run: |
-          # Get shard counts from inputs or use defaults (1 shard each for validation)
-          DISTRIBUTED_SHARDS=${{ inputs.distributed_shards || '1' }}
-          REGULAR_SHARDS=${{ inputs.regular_shards || '1' }}
+          # Get shard counts from inputs or use defaults
+          DISTRIBUTED_SHARDS=${{ inputs.distributed_shards || '10' }}
+          REGULAR_SHARDS=${{ inputs.regular_shards || '40' }}
 
           # Build distributed shard matrix (1 to DISTRIBUTED_SHARDS)
           DIST_SHARDS=$(seq 1 $DISTRIBUTED_SHARDS | tr '\n' ',' | sed 's/,$//')
