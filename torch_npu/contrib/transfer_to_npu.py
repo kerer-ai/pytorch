@@ -422,11 +422,13 @@ def _init():
     _patch_cuda()
     _device_wrapper(torch.cuda, torch_cuda_fn_white_list)
     torch.cuda.device.__init__ = _wrapper_cuda(torch.cuda.device.__init__)
+    torch.cuda.amp.autocast_mode = torch_npu.npu.amp.autocast_mode
 
     # torch.cuda.memory.*
     _device_wrapper(torch.npu.memory, ['_record_memory_history', '_snapshot'])
     torch.cuda.memory._record_memory_history = torch.npu.memory._record_memory_history
     torch.cuda.memory._snapshot = torch.npu.memory._snapshot
+    torch._C._host_emptyCache = torch_npu._C._npu_hostEmptyCache
 
     # torch.profiler.*
     _device_wrapper(torch_npu.profiler._KinetoProfile, ['export_memory_timeline'])
@@ -466,6 +468,8 @@ def _init():
     torch.distributed.distributed_c10d._new_group_with_tag = _wrapper_hccl(
         torch.distributed.distributed_c10d._new_group_with_tag)
     torch.distributed.device_mesh.DeviceMesh.__init__ = _wrapper_cuda(torch.distributed.device_mesh.DeviceMesh.__init__)
+    torch.distributed.ProcessGroupNCCL = torch_npu._C._distributed_c10d.ProcessGroupHCCL
+    torch.distributed.distributed_c10d.ProcessGroupNCCL = torch_npu._C._distributed_c10d.ProcessGroupHCCL
 
     # torch.distributed.pipelining.*
     if hasattr(torch.distributed, 'pipelining'):
@@ -488,6 +492,8 @@ def _init():
     _do_wrapper_libraries_func(_load_json_file(config_path))
 
     setattr(torch.utils._triton, 'has_triton', _patch_has_triton)
+    setattr(torch._dynamo.utils, 'has_triton', _patch_has_triton)
+    setattr(torch._inductor.runtime.autotune_cache, 'has_triton', _patch_has_triton)
 
     setattr(torch._utils, '_get_available_device_type', _patch_get_available_device_type)
     setattr(torch.distributed.checkpoint.filesystem._OverlappingCpuLoader, '__init__',

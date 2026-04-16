@@ -1,9 +1,54 @@
-from typing import List, Tuple
+from typing import Iterable, List, Tuple
 import sympy
 from torch._inductor import ir
+from torch._inductor.codegen.common import free_symbol_is_type
 from torch._inductor.scheduler import SchedulerNode
 from torch._inductor.utils import sympy_index_symbol
 from torch._inductor.virtualized import V
+from torch.utils._sympy.symbol import SymT
+
+
+def _append_stride_info(index, current_entry, symbol_stride_map):
+    for var, stride in index.as_coefficients_dict().items():
+        if var.is_Symbol and var not in symbol_stride_map and not free_symbol_is_type(var, SymT.INDIRECT):
+            symbol_stride_map[var] = stride
+        if var.is_Symbol and not free_symbol_is_type(var, SymT.INDIRECT):
+            current_entry["var_stride"].append((str(var), str(stride)))
+
+
+def _finalize_stride_collection(symbol_stride_map):
+    sorted_items = sorted(symbol_stride_map.items(), key=lambda x: x[1], reverse=False)
+    sorted_keys = [key for key, _ in sorted_items]
+    return sorted_keys
+
+
+def collect_stride_sorted_vars_from_indexings(indexings: Iterable):
+    symbol_stride_map = {}
+    for index in indexings:
+        current_entry = {
+            "index_expr": str(index),
+            "var_stride": [],
+        }
+        _append_stride_info(index, current_entry, symbol_stride_map)
+    return _finalize_stride_collection(symbol_stride_map)
+
+
+def collect_stride_sorted_vars_from_nodes(node_schedule: Iterable, skipped_nodes: Tuple):
+    symbol_stride_map = {}
+    for node in node_schedule:
+        if node in skipped_nodes:
+            continue
+        body = getattr(node, "_body", None)
+        indexing_list = getattr(body, "indexing", None)
+        if not indexing_list:
+            continue
+        for _, index in indexing_list.items():
+            current_entry = {
+                "index_expr": str(index),
+                "var_stride": [],
+            }
+            _append_stride_info(index, current_entry, symbol_stride_map)
+    return _finalize_stride_collection(symbol_stride_map)
 
 
 class IndexAnalysis:
@@ -184,6 +229,9 @@ class IndexAnalysis:
         if not self.kernel.golden_var_list:
             self.kernel.select_golden_varlist()
             self.gold = self.kernel.golden_var_list
+            self.tiling_axis = [x.symbol() for x in self.kernel.tiling_axis]
+            self.var_list = tuple([x[0] for x in self.var_stride if x[0] in self.tiling_axis])
+            self.stride_list = tuple([x[1] for x in self.var_stride if x[0] in self.tiling_axis])
 
         if self.gold is None:
             raise RuntimeError("assert gold must not be None")
@@ -275,11 +323,18 @@ class ReductionAnalysis:
 
     def dense_size_str(self):
         sizes = self.dense_size_list()
-        if self.numof_reduction_axis() > 1:
-            if self.contiguous_reduction:
-                return f"[{', '.join(self.dense_post_reduction_list())}]"
-            return f"[{'* '.join(sizes)}]"
-        return f"[{', '.join(sizes)}]"
+        num_red = self.numof_reduction_axis()
+        is_contig = self.contiguous_reduction
+        
+        if num_red > 1:
+            if is_contig:
+                result = f"[{', '.join(self.dense_post_reduction_list())}]"
+            else:
+                result = f"[{'* '.join(sizes)}]"
+        else:
+            result = f"[{', '.join(sizes)}]"
+        
+        return result
 
     def numof_reduction_axis(self):
         return self.kernel.numof_reduction_axis()
@@ -293,13 +348,24 @@ class ReductionAnalysis:
                 self.reduced_dim = 0
                 return 0
 
-        if not self.kernel.golden_var_list:
-            self.kernel.select_golden_varlist()
-        if self.kernel.golden_var_list is None:
-            raise RuntimeError("assert self.kernel.golden_var_list is not None")
+        if self.numof_reduction_axis() == 1:
+            if not self.kernel.golden_var_list:
+                self.kernel.select_golden_varlist()
+            reduction_layout_var_list = list(self.kernel.golden_var_list) if self.kernel.golden_var_list else []
+            if not reduction_layout_var_list:
+                reduction_layout_var_list = self.kernel.parse_golden_from_load_store_index()
+        else:
+            reduction_layout_var_list = self.kernel.parse_golden_from_load_store_index()
+            if not reduction_layout_var_list or not any(x.name[0] == 'r' for x in reduction_layout_var_list):
+                if not self.kernel.golden_var_list:
+                    self.kernel.select_golden_varlist()
+                reduction_layout_var_list = list(self.kernel.golden_var_list) if self.kernel.golden_var_list else []
+
+        if not reduction_layout_var_list:
+            raise RuntimeError("assert reduction_layout_var_list is not empty")
 
         dim = -1
-        for i, x in enumerate(reversed(self.kernel.golden_var_list)):
+        for i, x in enumerate(reversed(reduction_layout_var_list)):
             if x.name[0] == 'r':
                 dim = i
                 break

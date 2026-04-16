@@ -29,17 +29,21 @@ class SplitTiling:
 
 
     def is_contiguous_reduction(self):
-        def is_continugous_axis(axis_list):
+        def is_contiguous_axis(axis_list):
             axis_set = set(axis_list)
             return len(axis_set) == (max(axis_set) - min(axis_set) + 1)
 
         if self.kernel.numof_reduction_axis() > 1:
-            golden_var_list = self.kernel.parse_golden_from_load_store_index()
+            stride_sorted_var_list = self.kernel.parse_golden_from_load_store_index()
+            if not stride_sorted_var_list:
+                if not self.kernel.golden_var_list:
+                    self.kernel.select_golden_varlist()
+                stride_sorted_var_list = list(self.kernel.golden_var_list) if self.kernel.golden_var_list else []
             reduction_dim_list = [] 
-            for i, x in enumerate(reversed(golden_var_list)):
+            for i, x in enumerate(reversed(stride_sorted_var_list)):
                 if x.name[0] == 'r':
                     reduction_dim_list.append(i)
-            return is_continugous_axis(reduction_dim_list)
+            return is_contiguous_axis(reduction_dim_list)
         return False
 
     @classmethod
@@ -75,8 +79,14 @@ class SplitTiling:
         self.kernel.split_axis.clear()
 
         # total numel exceed aicore or total split axis exceed 3
-        def meet_stop_condition():
-            if self.total_split_numels(self.kernel.split_axis) >= num_vector_core:
+        def meet_stop_condition(): 
+            sv = V.graph.sizevars
+            current_numels = self.total_split_numels(self.kernel.split_axis)
+            try:
+                val = sv.size_hint(current_numels)
+            except TypeError:
+                return len(self.kernel.split_axis) >= 3
+            if val >= num_vector_core:
                 return True
             if len(self.kernel.split_axis) == 3:
                 return True

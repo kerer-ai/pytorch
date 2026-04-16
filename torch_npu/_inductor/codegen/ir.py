@@ -5,17 +5,17 @@ from math import gcd
 import sympy
 from sympy import Integer
 import torch
-from torch._inductor.ir import (ReductionHint, IRNode, ModularIndexing, FloorDiv, sympy_product)
+from torch._inductor.ir import (ReductionHint, IRNode, ModularIndexing, FloorDiv, sympy_product, Reduction)
 from torch._inductor.scheduler import SchedulerNode
 from torch._inductor.utils import sympy_subs, sympy_index_symbol, has_free_symbols
 from torch._inductor.virtualized import V
-from torch._inductor.loop_body import MemoryUsageType
+from torch._inductor.loop_body import MemoryUsageType, LoopBody, CaptureIndexing
 from torch._inductor.codegen.common import BackendFeature
-from torch._inductor import config
+from torch._inductor import config, sizevars
 from torch.utils._sympy.value_ranges import IntInfinity, ValueRanges
 from torch_npu._inductor.codegen.triton import NPUIndexTritonKernel
 from .triton_utils import get_indirect_var, get_indirect_mem_var, NPUKernelType
-from ..config import log, inductor_indirect_memory_mode
+from ..config import log, inductor_indirect_memory_mode, is_ascend950
 
 
 def reduction_split_factor(reduction_ranges):
@@ -133,7 +133,34 @@ def detect_flattened_dims(kernel, index):
     return new_vars
 
 
+def _should_skip_store_substitution(key, index, var, has_multiple_expansions, kernel):
+    if not (hasattr(kernel, 'store_index_keys') and key in kernel.store_index_keys):
+        return False
+    if not has_multiple_expansions:
+        return False
+    if var not in index.free_symbols:
+        return False
+
+    prefix = str(var)[0]
+    same_prefix_symbols = sorted(
+        [
+            sym for sym in index.free_symbols
+            if getattr(sym, "name", str(sym)).startswith(prefix)
+        ],
+        key=str,
+    )
+    return len(same_prefix_symbols) == 1 and same_prefix_symbols[0] == var
+
+
 def rebuild_flattened_dims(indexing):
+    """
+    Rebuild flattened dimensions in indexing expressions.
+    
+    This function processes indexing expressions to detect and rebuild
+    flattened dimensions. For Store indices with unified anchors
+    (symbols that have multiple expansion candidates), the processing
+    is is skipped to preserve the unified axis.
+    """
     def rebuild_flattened_dim(key, index, old_node, flatten_dim):
         for _, pair in flatten_dim.items():
             new_var_expr = sympy.Integer(0)
@@ -161,17 +188,39 @@ def rebuild_flattened_dims(indexing):
                     new_var_expr = new_var_expr + new_node.symbol()
                 V.kernel.expr_substituted[expr] = new_node.symbol()
 
-            if var not in V.kernel.range_tree_nodes_substituted:
-                V.kernel.range_tree_nodes_substituted[var] = []
-            V.kernel.range_tree_nodes_substituted[var].append((origin_axis_length, new_var_expr))
+            if old_node.symbol() not in V.kernel.range_tree_nodes_substituted:
+                V.kernel.range_tree_nodes_substituted[old_node.symbol()] = []
+            V.kernel.range_tree_nodes_substituted[old_node.symbol()].append((origin_axis_length, new_var_expr))
+
+            log.debug(
+                "rebuild_flattened_dim: key=%s, old_node=%s, new_var_expr=%s",
+                key, old_node.symbol(), new_var_expr
+            )
 
     def find_index_in_substitute(index, kernel):
         return any([index.find(key) for key in kernel.expr_substituted.keys()])
 
     kernel = V.kernel
+    
+    log.debug(
+        "rebuild_flattened_dims: indexing_keys=%s, range_tree_nodes=%s",
+        list(indexing.keys()), list(kernel.range_tree_nodes.keys())
+    )
+    
+    # Process non-Store indices first to populate range_tree_nodes_substituted.
+    # Then process Store indices and skip those with unified anchors
+    # (symbols that have multiple expansion candidates).
+    store_keys = getattr(kernel, 'store_index_keys', set())
+    store_items = []
+    
     for key, index in indexing.items():
+        if key in store_keys:
+            store_items.append((key, index))
+            continue
+        
         # 1. try to find out flattened axis from indexing
         flatten_dims = detect_flattened_dims(kernel, index)
+        
         # 2. try to rebuild these flattened dims
         for var, flatten_dim in flatten_dims.items():
             if (var in kernel.range_tree_nodes):
@@ -184,6 +233,57 @@ def rebuild_flattened_dims(indexing):
         if find_index_in_substitute(index, kernel):
             new_index = sympy_subs(index, kernel.expr_substituted)
             indexing[key] = new_index
+    
+    log.debug(
+        "rebuild_flattened_dims: range_tree_nodes_substituted=%s, store_items=%s",
+        kernel.range_tree_nodes_substituted, store_items
+    )
+    
+    # Now process Store indices. Skip those containing a unified anchor:
+    # a symbol that is the only one with its prefix in the Store index AND
+    # has multiple expansion candidates in range_tree_nodes_substituted.
+    for key, index in store_items:
+        skip = False
+        for sym in index.free_symbols:
+            prefix = str(sym)[0]
+            same_prefix_symbols = [
+                s for s in index.free_symbols
+                if getattr(s, "name", str(s)).startswith(prefix)
+            ]
+            # Check if this symbol is a unified anchor:
+            # 1. It's the only symbol with this prefix in the Store index
+            # 2. It has multiple expansion candidates (multiple expansion patterns)
+            if (len(same_prefix_symbols) == 1 and same_prefix_symbols[0] == sym
+                    and sym in kernel.range_tree_nodes_substituted
+                    and len(kernel.range_tree_nodes_substituted[sym]) > 1):
+                skip = True
+                log.info(
+                    "Skip Store index %s because %s is a unified anchor with multiple expansions",
+                    key, sym
+                )
+                break
+        
+        if skip:
+            continue
+        
+        flatten_dims = detect_flattened_dims(kernel, index)
+        
+        for var, flatten_dim in flatten_dims.items():
+            if (var in kernel.range_tree_nodes):
+                old_node = kernel.range_tree_nodes[var]
+            else:
+                old_node = kernel.range_tree_nodes_removed[var]
+
+            rebuild_flattened_dim(key, index, old_node, flatten_dim)
+
+        if find_index_in_substitute(index, kernel):
+            new_index = sympy_subs(index, kernel.expr_substituted)
+            indexing[key] = new_index
+    
+    log.debug(
+        "rebuild_flattened_dims: range_trees AFTER=%s",
+        [(t.prefix, t.var_list) for t in kernel.range_trees]
+    )
 
 
 def substituted_dims_in_indexing(self, indexing, kernel, range_tree_nodes_substituted):
@@ -192,7 +292,6 @@ def substituted_dims_in_indexing(self, indexing, kernel, range_tree_nodes_substi
         if not (len(candidates) > 0):
             raise RuntimeError("assert len(candidates) > 0, candidates")
         exprs = sorted(candidates, reverse=True, key=lambda x: x[0])
-        # the best candidate is with the longest numel
         numel = exprs[0][0]
         expr = exprs[0][1]
         node = kernel.range_tree_nodes[var]
@@ -200,17 +299,27 @@ def substituted_dims_in_indexing(self, indexing, kernel, range_tree_nodes_substi
             log.debug("sub nodes (expr%s, numel:%d) can not substitute parent node(%s:%d)",
                       expr, numel, node.symbol(), node.length)
             continue
+
+        has_multiple_expansions = len(candidates) > 1
+
         for key, index in indexing.items():
+            if _should_skip_store_substitution(key, index, var, has_multiple_expansions, kernel):
+                log.info(
+                    "Skip Store substitution for key=%s var=%s because Store unified anchor is preserved",
+                    key,
+                    var,
+                )
+                continue
             if var in index.free_symbols:
                 index = index.subs(var, expr)
                 indexing[key] = index
                 substituted = True
-
     return substituted
 
 
 def generate_body_indexing(body, indices):
     index = list(itertools.chain.from_iterable(indices))
+    
     if not (len(index) == len(body.var_ranges)):
         raise RuntimeError("assert len(index) == len(body.var_ranges), (index, body.var_ranges)")
     if not (all(v not in body.var_ranges for v in index)):
@@ -223,6 +332,7 @@ def generate_body_indexing(body, indices):
         name: sympy_subs(expr, replacements)
         for name, expr in body.indexing_exprs.items()
     }
+    
     setattr(body, 'indirect_replacements', {})
     body.generate_indirect_replacements()
 
@@ -868,15 +978,141 @@ def split_expression(expr):
         return expr
 
 
+def has_dynamic_shape(var_ranges):
+    """
+    Check if any dimension in var_ranges is dynamic (unbacked symint)
+
+    A dimension is considered dynamic if:
+    1. Its length is a sympy Symbol (not a concrete value)
+    2. Its length is a sympy expression containing free symbols
+    This indicates the dimension size is not statically known at compile time.
+
+    Args:
+        var_ranges: Dict[sympy.Symbol, int/sympy.Expr]
+                   Mapping from variable symbols to their range lengths
+
+    Returns:
+        bool: True if any dimension is dynamic, False otherwise
+    """
+    try:
+        for var, length in var_ranges.items():
+            # Check 1: If length is a pure Symbol, it's dynamic
+            if isinstance(length, sympy.Symbol):
+                return True
+            
+            # Check 2: If length has free symbols (expression with unknowns), it's dynamic
+            if hasattr(length, 'free_symbols'):
+                free_syms = length.free_symbols
+                if free_syms:
+                    return True
+            
+            # Check 3: If length is not a concrete number, it's dynamic
+            if not isinstance(length, (int, sympy.Integer)):
+                return True
+
+        return False
+
+    except Exception as e:
+        log.warning(f"Error checking dynamic shape: {e}")
+        return False
+
+
+def check_subexpr_for_dynamic_symbols(expr):
+    """
+    Recursively check if expression contains symbolic variables in problematic contexts.
+    
+    Checks ModularIndexing.upper and FloorDiv.divisor for symbolic variables.
+    These parameters cause issues in linearization when they are symbolic.
+    
+    Args:
+        expr: sympy expression to check
+        
+    Returns:
+        bool: True if expression contains symbolic bounds, False otherwise
+    """
+    if isinstance(expr, ModularIndexing):
+        args = expr.args
+        if len(args) == 3:
+            expr_to_mod, lower, upper = args
+            # If upper is a symbol or has free symbols, it's dynamic
+            if isinstance(upper, sympy.Symbol):
+                return True
+            if hasattr(upper, 'free_symbols') and upper.free_symbols:
+                return True
+    
+    elif isinstance(expr, FloorDiv):
+        args = expr.args
+        if len(args) >= 1:
+            divisor = args[-1]
+            # If divisor is a symbol or has free symbols, it's dynamic
+            if isinstance(divisor, sympy.Symbol):
+                return True
+            if hasattr(divisor, 'free_symbols') and divisor.free_symbols:
+                return True
+    
+    # Recursively check args
+    if hasattr(expr, 'args'):
+        for arg in expr.args:
+            if check_subexpr_for_dynamic_symbols(arg):
+                return True
+    
+    return False
+
+
+def should_skip_linearization_on_a5(var_ranges, indexing):
+    """
+    Determine if memory access linearization should be skipped on A5 platform.
+    
+    On A5 platform, skip linearization when:
+    1. var_ranges contain dynamic shapes (symbolic lengths)
+    2. indexing expressions contain symbolic bounds in ModularIndexing/FloorDiv
+    
+    Args:
+        var_ranges: Dict mapping symbols to their range lengths
+        indexing: Dict mapping buffer names to index expressions
+        
+    Returns:
+        bool: True if should skip linearization on A5, False otherwise
+    """
+    if not is_ascend950:
+        return False
+    
+    # Check var_ranges for dynamic shapes
+    if has_dynamic_shape(var_ranges):
+        return True
+    
+    # Check indexing expressions for symbolic bounds
+    if indexing:
+        for key, index_expr in indexing.items():
+            if check_subexpr_for_dynamic_symbols(index_expr):
+                return True
+    
+    return False
+
+
 def transform_dims_in_indexing(self, indices):
+    # Step 1: Generate basic indexing (always executed)
     if self.indexing is None:
         remove_zero_terms(self.indexing_exprs, self.var_ranges)
         generate_body_indexing(self, indices)
     
+    # Step 2: Check for dynamic shapes (only skip on A5 platform)
+    if should_skip_linearization_on_a5(self.var_ranges, self.indexing):
+        log.info(
+            "Skip memory access linearization due to dynamic shape on A5. "
+            f"var_ranges: {self.var_ranges}"
+        )
+        # Set SIMT_ONLY compile option for dynamic shapes on A5
+        V.kernel.npu_kernel_type = NPUKernelType.SIMT_ONLY
+        return  # Early return, skip linearization on A5 with dynamic shapes
+    
+    # Step 3: Perform memory access linearization
     log.debug(f"[Linear] ori indexing:{self.indexing}\nV.kernel.range_tree_nodes:{V.kernel.range_tree_nodes}")
+    
     for key, index_expr in self.indexing.items():
         analyse_res = analyze_expression(index_expr, V.kernel.range_tree_nodes)
         log.debug(f"[Linear] linear analyse res:{analyse_res}")
+        
         if not analyse_res["can_split_all"]:
             raise ValueError(f"Can not split expression:{self.indexing}"\
                              f"\nrange_tree_nodes:{V.kernel.range_tree_nodes}"\
@@ -1159,3 +1395,29 @@ def loop_body_block_cat_store(self, dst, src, size, store_offset_index, output_b
 
 def simplify_indexing_cat_store(self, dst, src, size, store_offset_index, output_buffer_index):
     return self._inner.cat_store(dst, src, size, self._simplify(store_offset_index), self._simplify(output_buffer_index))
+
+def patch_num_split():
+    Reduction.num_splits = num_splits
+
+def patch_loop_body():
+    # todo: move patch function to loop_body.py
+    LoopBody.__call__ = loopbody__call__
+
+    setattr(LoopBody, 'transform_dims_in_indexing', transform_dims_in_indexing)
+    setattr(LoopBody, 'substituted_dims_in_indexing', substituted_dims_in_indexing)
+    setattr(LoopBody, 'generate_indirect_replacements', generate_indirect_replacements)
+    setattr(LoopBody, 'generate_masked_indexing', generate_masked_indexing)
+    setattr(LoopBody, 'substitube_indirect_index', substitube_indirect_index)
+
+def patch_indexing():
+    # todo: move patch function to loop_body.py and _sizevars.py
+    setattr(CaptureIndexing, 'index_select', loop_body_block_index_select)
+    setattr(sizevars.SimplifyIndexing, 'index_select', simplify_indexing_index_select)
+    setattr(CaptureIndexing, 'gather_template', loop_body_block_gather_template)
+    setattr(sizevars.SimplifyIndexing, 'gather_template', simplify_indexing_gather_template)
+    setattr(CaptureIndexing, 'indexput_template', loop_body_block_indexput_template)
+    setattr(sizevars.SimplifyIndexing, 'indexput_template', simplify_indexing_indexput_template)
+    setattr(CaptureIndexing, 'scatter_template', loop_body_block_scatter_template)
+    setattr(sizevars.SimplifyIndexing, 'scatter_template', simplify_indexing_scatter_template)
+    setattr(CaptureIndexing, 'cat_store', loop_body_block_cat_store)
+    setattr(sizevars.SimplifyIndexing, 'cat_store', simplify_indexing_cat_store)
