@@ -162,6 +162,19 @@ def path_matches_excluded_pattern(path: str) -> bool:
     return False
 
 
+def get_shard_type_prefix(shard_type: str) -> str:
+    """
+    Convert shard type to short prefix for file naming.
+
+    Args:
+        shard_type: "distributed" or "regular"
+
+    Returns:
+        "dist" for distributed, "reg" for regular
+    """
+    return "dist" if shard_type == "distributed" else "reg"
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run PyTorch NPU tests for a shard via direct pytest")
     parser.add_argument("--shard", type=int, required=True, help="Shard number (1-indexed within test-type)")
@@ -671,7 +684,8 @@ def finalize_stats(base_stats: Dict, returncode: int, duration: float, error_mes
 
 def save_stats_file(report_dir: str, shard: int, stats: Dict, shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    stats_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_stats.json")
+    prefix = get_shard_type_prefix(shard_type)
+    stats_file = os.path.join(report_dir, f"shard_{prefix}-{shard}_stats.json")
     with open(stats_file, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2)
     return stats_file
@@ -679,7 +693,8 @@ def save_stats_file(report_dir: str, shard: int, stats: Dict, shard_type: str = 
 
 def save_info_file(report_dir: str, shard: int, info: Dict, shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    info_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_info.json")
+    prefix = get_shard_type_prefix(shard_type)
+    info_file = os.path.join(report_dir, f"shard_{prefix}-{shard}_info.json")
     with open(info_file, "w", encoding="utf-8") as f:
         json.dump(info, f, indent=2)
     return info_file
@@ -687,7 +702,8 @@ def save_info_file(report_dir: str, shard: int, info: Dict, shard_type: str = "r
 
 def save_test_plan_file(report_dir: str, shard: int, planned_tests: List[str], shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    plan_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_planned_test_files.txt")
+    prefix = get_shard_type_prefix(shard_type)
+    plan_file = os.path.join(report_dir, f"shard_{prefix}-{shard}_planned_test_files.txt")
     with open(plan_file, "w", encoding="utf-8") as f:
         for target in planned_tests:
             f.write(f"{target}\n")
@@ -696,7 +712,8 @@ def save_test_plan_file(report_dir: str, shard: int, planned_tests: List[str], s
 
 def save_excluded_test_files_file(report_dir: str, shard: int, test_targets: List[str], shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    excluded_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_excluded_test_files.txt")
+    prefix = get_shard_type_prefix(shard_type)
+    excluded_file = os.path.join(report_dir, f"shard_{prefix}-{shard}_excluded_test_files.txt")
     with open(excluded_file, "w", encoding="utf-8") as f:
         for target in test_targets:
             f.write(f"{target}\n")
@@ -705,7 +722,8 @@ def save_excluded_test_files_file(report_dir: str, shard: int, test_targets: Lis
 
 def save_unhandled_upstream_tests_file(report_dir: str, shard: int, test_targets: List[str], shard_type: str = "regular") -> str:
     os.makedirs(report_dir, exist_ok=True)
-    unhandled_file = os.path.join(report_dir, f"shard_{shard_type}-{shard}_unhandled_upstream_tests.txt")
+    prefix = get_shard_type_prefix(shard_type)
+    unhandled_file = os.path.join(report_dir, f"shard_{prefix}-{shard}_unhandled_upstream_tests.txt")
     with open(unhandled_file, "w", encoding="utf-8") as f:
         for target in test_targets:
             f.write(f"{target}\n")
@@ -713,7 +731,8 @@ def save_unhandled_upstream_tests_file(report_dir: str, shard: int, test_targets
 
 
 def get_disabled_testcases_report_file(report_dir: str, shard: int, shard_type: str = "regular") -> str:
-    return os.path.join(report_dir, f"shard_{shard_type}-{shard}_disabled_testcases.json")
+    prefix = get_shard_type_prefix(shard_type)
+    return os.path.join(report_dir, f"shard_{prefix}-{shard}_disabled_testcases.json")
 
 
 def load_disabled_testcases_report(report_dir: str, shard: int, shard_type: str = "regular") -> Dict:
@@ -768,6 +787,7 @@ def build_execution_env(
     disabled_testcases_file: str,
     report_dir: str,
     shard: int,
+    shard_type: str = "regular",
 ) -> Dict[str, str]:
     repo_root = test_dir.parent
     pythonpath_parts = [str(script_dir)]
@@ -796,7 +816,7 @@ def build_execution_env(
     if disabled_testcases_file:
         updates["NPU_DISABLED_TESTCASES_JSON"] = os.path.abspath(disabled_testcases_file)
         updates["NPU_DISABLED_TESTCASES_REPORT"] = os.path.abspath(
-            get_disabled_testcases_report_file(report_dir, shard)
+            get_disabled_testcases_report_file(report_dir, shard, shard_type)
         )
 
     return updates
@@ -908,7 +928,8 @@ def build_pytest_command(
     Returns:
         Command list for subprocess execution
     """
-    xml_file = report_dir / f"shard_{shard_type}-{shard}_pytest{xml_suffix}.xml"
+    prefix = get_shard_type_prefix(shard_type)
+    xml_file = report_dir / f"shard_{prefix}-{shard}_pytest{xml_suffix}.xml"
     command = [
         sys.executable,
         "-m",
@@ -991,6 +1012,7 @@ def run_tests_via_pytest(
         missing_files: List of test files that crashed and didn't generate XML report
     """
     start = monotonic()
+    prefix = get_shard_type_prefix(shard_type)
     log_file = get_shard_log_file(report_dir, shard, shard_type)
 
     merged_env = os.environ.copy()
@@ -1038,7 +1060,7 @@ def run_tests_via_pytest(
                 """
                 test_name = strip_test_prefix_and_suffix(test_file)
                 safe_name = test_name.replace("/", "_")
-                expected_xml = report_dir / f"shard_{shard_type}-{shard}_pytest_{safe_name}.xml"
+                expected_xml = report_dir / f"shard_{prefix}-{shard}_pytest_{safe_name}.xml"
 
                 command = build_pytest_command(
                     [test_file],
@@ -1052,7 +1074,7 @@ def run_tests_via_pytest(
                 )
 
                 # Write per-file log to separate file for isolation
-                file_log_path = report_dir / f"shard_{shard_type}-{shard}_log_{safe_name}.txt"
+                file_log_path = report_dir / f"shard_{prefix}-{shard}_log_{safe_name}.txt"
 
                 with log_lock:
                     log_handle.write(f"\n[File {idx}/{len(planned_tests)}] {test_name}\n")
@@ -1098,7 +1120,7 @@ def run_tests_via_pytest(
                 for future in as_completed(futures):
                     test_file, rc, xml_generated, test_name = future.result()
                     executed_files[test_file] = {
-                        "xml_expected": report_dir / f"shard_{shard_type}-{shard}_pytest_{test_name.replace('/', '_')}.xml",
+                        "xml_expected": report_dir / f"shard_{prefix}-{shard}_pytest_{test_name.replace('/', '_')}.xml",
                         "xml_generated": xml_generated,
                         "returncode": rc,
                         "test_name": test_name,
@@ -1118,7 +1140,7 @@ def run_tests_via_pytest(
                     test_name = strip_test_prefix_and_suffix(test_file)
                     # Sanitize test_name for use in filename (replace / with _)
                     safe_name = test_name.replace("/", "_")
-                    expected_xml = report_dir / f"shard_{shard_type}-{shard}_pytest_{safe_name}.xml"
+                    expected_xml = report_dir / f"shard_{prefix}-{shard}_pytest_{safe_name}.xml"
 
                     executed_files[test_file] = {
                         "xml_expected": expected_xml,
@@ -1176,7 +1198,7 @@ def run_tests_via_pytest(
 
                 # For parallel tests, we don't have per-file XML tracking
                 # The single XML covers all parallel tests
-                parallel_xml = report_dir / f"shard_{shard_type}-{shard}_pytest.xml"
+                parallel_xml = report_dir / f"shard_{prefix}-{shard}_pytest.xml"
                 for test_file in parallel_tests:
                     executed_files[test_file] = {
                         "xml_expected": parallel_xml,
@@ -1193,14 +1215,14 @@ def run_tests_via_pytest(
 
     # Save missing files list for summary script
     if missing_files:
-        missing_file_path = report_dir / f"shard_{shard_type}-{shard}_missing_files.txt"
+        missing_file_path = report_dir / f"shard_{prefix}-{shard}_missing_files.txt"
         with missing_file_path.open("w", encoding="utf-8") as f:
             for test_file in missing_files:
                 f.write(f"{test_file}\n")
         print(f"\nWarning: {len(missing_files)} files did not generate XML reports (likely crashed)")
 
     # --- Aggregate stats from all generated XML files ---
-    xml_files = sorted(report_dir.glob(f"shard_{shard_type}-{shard}_pytest*.xml"))
+    xml_files = sorted(report_dir.glob(f"shard_{prefix}-{shard}_pytest*.xml"))
     stats = aggregate_junit_stats([report_dir])
     stats["junit_generated"] = bool(xml_files)
     stats["junit_xml_files"] = len(xml_files)
@@ -1442,7 +1464,7 @@ def main():
     remove_existing_file(Path(get_disabled_testcases_report_file(str(report_dir), args.shard, shard_type)))
     remove_existing_file(get_shard_log_file(report_dir, args.shard, shard_type))
 
-    env_updates = build_execution_env(test_dir, script_dir, args.disabled_testcases, str(report_dir), args.shard)
+    env_updates = build_execution_env(test_dir, script_dir, args.disabled_testcases, str(report_dir), args.shard, shard_type)
 
     missing_files = []
     if planned_tests:

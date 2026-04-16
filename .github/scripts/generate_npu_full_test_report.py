@@ -848,12 +848,14 @@ def main():
         totals["test_failures"] += int(info.get("test_failures", 0) or stats.get("test_failures", 0))
         totals["missing_files"] += len(missing_files_list)
 
-        shard_rows.append(
-            {
-                "shard": f"{shard_type[:4]}-{shard_num}",  # "dist-1" or "reg-1"
-                "shard_type": shard_type,
-                "shard_num": shard_num,
-                "status": status,
+        # Convert shard_type to display prefix ("distributed" -> "dist", "regular" -> "reg")
+                shard_prefix = "dist" if shard_type == "distributed" else "reg"
+                shard_rows.append(
+                    {
+                        "shard": f"{shard_prefix}-{shard_num}",  # "dist-1" or "reg-1"
+                        "shard_type": shard_type,
+                        "shard_num": shard_num,
+                        "status": status,
                 "total": int(stats.get("total", 0)),
                 "passed": int(stats.get("passed", 0)),
                 "failed": int(stats.get("failed", 0)),
