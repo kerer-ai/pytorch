@@ -72,7 +72,15 @@ jobs:
           # Get shard counts from inputs or use defaults
           DISTRIBUTED_SHARDS=${{ inputs.distributed_shards || '50' }}
           REGULAR_SHARDS=${{ inputs.regular_shards || '60' }}
-          TEST_MODE=${{ inputs.test_mode || 'single' }}
+
+          # For schedule events, always run full test (all shards)
+          # For other events, respect test_mode input
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            TEST_MODE="full"
+            echo "Schedule event detected: forcing FULL test mode"
+          else
+            TEST_MODE=${{ inputs.test_mode || 'single' }}
+          fi
 
           # For test mode "single", only run shard 1 of each type
           if [ "$TEST_MODE" = "single" ]; then
