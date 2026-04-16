@@ -8,7 +8,7 @@ on:
       - '.github/scripts/run_npu_test_shard.py'
       - '.github/scripts/pytest_disabled_testcases_plugin.py'
       - '.github/scripts/generate_npu_full_test_report.py'
-      - 'test_upsteam/**'
+      - 'test_upstream/**'
   pull_request:
     paths:
       - '.github/workflows/npu-full-test.yml'
@@ -16,7 +16,7 @@ on:
       - '.github/scripts/run_npu_test_shard.py'
       - '.github/scripts/pytest_disabled_testcases_plugin.py'
       - '.github/scripts/generate_npu_full_test_report.py'
-      - 'test_upsteam/**'
+      - 'test_upstream/**'
   schedule:
     - cron: '0 22 * * 1'  # UTC 22:00 (Beijing time next day 06:00), every Monday
   workflow_dispatch:
@@ -61,9 +61,13 @@ jobs:
       regular_shards: ${{ steps.set_matrix.outputs.regular_shards }}
       patch_count: ${{ steps.apply_patches.outputs.patch_count }}
     steps:
-      - name: Checkout current repository
+      - name: Checkout repository (handle PR from fork)
         uses: actions/checkout@v4
         with:
+          # For PRs from forks, checkout the PR source repository
+          # For push/schedule/workflow_dispatch, checkout the current repository
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 1
 
       - name: Set shard matrices
@@ -101,14 +105,14 @@ jobs:
           git clone --depth=1 --branch v${{ env.PYTORCH_VERSION }} \
             https://github.com/pytorch/pytorch.git pytorch-test-src
 
-      - name: Copy test_upsteam patches
+      - name: Copy test_upstream patches
         run: |
-          cp -r test_upsteam pytorch-test-src/
+          cp -r test_upstream pytorch-test-src/
 
       - name: Apply NPU patches
         id: apply_patches
         run: |
-          cd pytorch-test-src/test_upsteam
+          cd pytorch-test-src/test_upstream
           chmod +x apply_patch.sh
           ./apply_patch.sh 2>&1 | tee /tmp/patch.log
           PATCH_COUNT=$(grep -c "成功" /tmp/patch.log || echo "0")
@@ -178,9 +182,11 @@ jobs:
       max-parallel: 50
 
     steps:
-      - name: Checkout current repository (for test runner)
+      - name: Checkout repository (for test runner, handle PR from fork)
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 1
           path: ascend_pytorch
 
@@ -282,8 +288,8 @@ jobs:
             --num-shards ${NUM_DISTRIBUTED_SHARDS} \
             --test-type distributed \
             --test-dir pytorch-test-src/test \
-            --disabled-testcases pytorch-test-src/test_upsteam/disabled_testcases.json \
-            --case-paths-config pytorch-test-src/test_upsteam/case_paths_ci.yml \
+            --disabled-testcases pytorch-test-src/test_upstream/disabled_testcases.json \
+            --case-paths-config pytorch-test-src/test_upstream/case_paths_ci.yml \
             --report-dir ${REPORT_DIR} \
             --timeout 600 \
             --parallel 1 \
@@ -332,9 +338,11 @@ jobs:
       max-parallel: 60
 
     steps:
-      - name: Checkout current repository (for test runner)
+      - name: Checkout repository (for test runner, handle PR from fork)
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 1
           path: ascend_pytorch
 
@@ -436,8 +444,8 @@ jobs:
             --num-shards ${NUM_REGULAR_SHARDS} \
             --test-type regular \
             --test-dir pytorch-test-src/test \
-            --disabled-testcases pytorch-test-src/test_upsteam/disabled_testcases.json \
-            --case-paths-config pytorch-test-src/test_upsteam/case_paths_ci.yml \
+            --disabled-testcases pytorch-test-src/test_upstream/disabled_testcases.json \
+            --case-paths-config pytorch-test-src/test_upstream/case_paths_ci.yml \
             --report-dir ${REPORT_DIR} \
             --timeout 600 \
             --parallel 2 \
@@ -478,9 +486,11 @@ jobs:
     if: always() && needs.prepare.result == 'success' && needs.build_torch_npu.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout current repository (for report)
+      - name: Checkout repository (for report, handle PR from fork)
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 1
 
       - name: Setup Python ${{ env.PYTHON_VERSION }}

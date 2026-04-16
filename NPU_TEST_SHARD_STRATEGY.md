@@ -218,7 +218,7 @@ def path_matches_excluded_pattern(path: str) -> bool:
 
 ### 5.1 配置文件
 
-`test_upsteam/case_paths_ci.yml`
+`test_upstream/case_paths_ci.yml`
 
 ```yaml
 whitelist:
@@ -402,9 +402,9 @@ def select_shard_files(test_files: List[str], shard: int, num_shards: int) -> Li
 | 文件 | 作用 |
 |------|------|
 | `.github/scripts/run_npu_test_shard.py` | 分片执行主脚本 |
-| `test_upsteam/case_paths_ci.yml` | Whitelist/Blacklist 配置 |
-| `test_upsteam/disabled_testcases.json` | 禁用测试用例配置 |
-| `test_upsteam/CRASHED.yml` | 崩溃测试文件配置 |
+| `test_upstream/case_paths_ci.yml` | Whitelist/Blacklist 配置 |
+| `test_upstream/disabled_testcases.json` | 禁用测试用例配置 |
+| `test_upstream/CRASHED.yml` | 崩溃测试文件配置 |
 | `tools/testing/discover_tests.py` | TESTS 列表生成（上游） |
 | `test/run_test.py` | 测试执行入口（上游） |
 
