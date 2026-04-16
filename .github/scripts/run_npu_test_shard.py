@@ -196,8 +196,15 @@ def get_shard_type(shard: int) -> Tuple[str, int, int]:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run PyTorch NPU tests for a shard via direct pytest")
-    parser.add_argument("--shard", type=int, required=True, help="Shard number (1-indexed, 1-101)")
-    parser.add_argument("--num-shards", type=int, default=TOTAL_SHARDS, help="Total number of shards (default 101)")
+    parser.add_argument("--shard", type=int, required=True, help="Shard number (1-indexed within test-type)")
+    parser.add_argument("--num-shards", type=int, required=True, help="Total number of shards for this test-type")
+    parser.add_argument(
+        "--test-type",
+        type=str,
+        choices=["distributed", "regular"],
+        default="regular",
+        help="Test type: 'distributed' for distributed tests, 'regular' for other tests",
+    )
     parser.add_argument("--test-dir", type=str, required=True, help="Path to the PyTorch test directory")
     parser.add_argument("--disabled-testcases", type=str, help="Path to disabled_testcases.json")
     parser.add_argument(
@@ -1146,11 +1153,14 @@ def _run_pytest_subprocess(
 
 def main():
     args = parse_args()
-    if args.shard < 1 or args.shard > TOTAL_SHARDS:
-        raise ValueError(f"Invalid shard {args.shard}; expected 1 <= shard <= {TOTAL_SHARDS}")
 
-    # Determine shard type based on shard number
-    shard_type, shard_index, shard_total = get_shard_type(args.shard)
+    # Use test_type from args directly instead of deriving from shard number
+    shard_type = args.test_type
+    shard_index = args.shard
+    shard_total = args.num_shards
+
+    if args.shard < 1 or args.shard > args.num_shards:
+        raise ValueError(f"Invalid shard {args.shard}; expected 1 <= shard <= {args.num_shards}")
 
     timestamp = datetime.now().isoformat()
     info = create_shard_info(args.shard, args.num_shards, timestamp)
@@ -1182,14 +1192,7 @@ def main():
 
     # Get test file list - use TESTS list from discover_tests.py (same as run_test.py --help)
     # unless --use-raw-discovery is specified
-    # For "excluded" shard type, always use raw file scan to find tests that are
-    # excluded by discover_tests.py (blocklisted_patterns/blocklisted_tests)
-    if shard_type == "excluded":
-        # Excluded shard needs to find tests that are NOT in TESTS list
-        # Use raw file scan to discover all test files including blocklisted ones
-        raw_test_files = discover_raw_test_files(test_dir)
-        info["test_discovery_mode"] = "raw_file_scan_for_excluded_tests"
-    elif args.use_tests_list and not args.use_raw_discovery:
+    if args.use_tests_list and not args.use_raw_discovery:
         raw_test_files = get_tests_list_from_discover_tests(test_dir)
         info["test_discovery_mode"] = "TESTS_list"
     else:
@@ -1204,7 +1207,7 @@ def main():
     else:
         info["crashed_excluded_files"] = 0
 
-    # Filter tests by shard type (distributed, excluded, or regular)
+    # Filter tests by shard type (distributed or regular) based on --test-type argument
     type_selected_files, type_excluded_files = filter_tests_by_type(raw_test_files, shard_type)
     info["type_selected_files"] = len(type_selected_files)
     info["type_excluded_files"] = len(type_excluded_files)
@@ -1231,7 +1234,7 @@ def main():
     print(f"\n{'=' * 60}")
     print("PyTorch NPU Test Runner (direct pytest)")
     print(f"{'=' * 60}")
-    print(f"Shard: {args.shard}/{TOTAL_SHARDS}")
+    print(f"Shard: {args.shard}/{args.num_shards}")
     print(f"Shard type: {shard_type} (shard {shard_index}/{shard_total} within type)")
     print(f"Repository root: {repo_root}")
     print(f"Test directory: {test_dir}")
