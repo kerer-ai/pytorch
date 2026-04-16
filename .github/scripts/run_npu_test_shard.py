@@ -759,8 +759,9 @@ def load_disabled_testcases_report(report_dir: str, shard: int, shard_type: str 
 
 
 def print_stats_summary(shard: int, stats: Dict, shard_type: str = "regular") -> None:
+    prefix = get_shard_type_prefix(shard_type)
     print(f"\n{'=' * 60}")
-    print(f"Test Results for Shard {shard_type}-{shard}")
+    print(f"Test Results for Shard {prefix}-{shard}")
     print(f"{'=' * 60}")
     print(f"Total:  {stats['total']}")
     print(f"Passed: {stats['passed']}")
@@ -834,7 +835,8 @@ def remove_existing_file(path: Path) -> None:
 
 
 def get_shard_log_file(report_dir: Path, shard: int, shard_type: str = "regular") -> Path:
-    return report_dir / f"test_shard_{shard_type}-{shard}.log"
+    prefix = get_shard_type_prefix(shard_type)
+    return report_dir / f"test_shard_{prefix}-{shard}.log"
 
 
 def run_command_with_tee(command: List[str], cwd: Path, env: Dict[str, str], log_file: Path) -> int:
@@ -1438,8 +1440,8 @@ def main():
     }
     print(f"Test discovery mode: {info['test_discovery_mode']} ({discovery_desc.get(info['test_discovery_mode'], 'unknown')})")
     print(f"Parallel workers requested: {args.parallel}")
-    if shard_type == "distributed" and not args.per_file_isolation and args.parallel == 2:
-        print("  (distributed tests will auto-switch to serial per-file isolation for crash safety)")
+    if shard_type == "distributed" and not args.per_file_isolation:
+        print("  (distributed tests will auto-switch to per-file isolation for crash safety)")
     if crashed_config_file:
         print(f"Crashed files config: {crashed_config_file}")
         print(f"Crashed files excluded: {info['crashed_excluded_files']}")
