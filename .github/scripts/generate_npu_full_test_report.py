@@ -121,7 +121,9 @@ def extract_test_identifier(test_path: str) -> str:
     return path
 
 
-def aggregate_testsuite_stats_for_shard(reports_root: Path, shard: int, planned_files: List[str]) -> List[Dict]:
+def aggregate_testsuite_stats_for_shard(
+    reports_root: Path, shard: int, planned_files: List[str], missing_files_list: List[str] = None
+) -> List[Dict]:
     """
     Aggregate all testsuite statistics for a specific shard.
 
@@ -132,10 +134,15 @@ def aggregate_testsuite_stats_for_shard(reports_root: Path, shard: int, planned_
         reports_root: Root directory containing all merged report files
         shard: Shard number to aggregate for
         planned_files: List of test file paths planned for this shard
+        missing_files_list: List of test file paths that crashed and didn't generate XML
 
     Returns:
-        List of testsuite statistics for tests belonging to this shard
+        List of testsuite statistics for tests belonging to this shard.
+        Missing files are included with status="MISSING" and tests=0.
     """
+    if missing_files_list is None:
+        missing_files_list = []
+
     all_testsuites = {}
     # Map from test identifier -> aggregated stats
 
@@ -219,6 +226,22 @@ def aggregate_testsuite_stats_for_shard(reports_root: Path, shard: int, planned_
                     aggregated["skipped"] += ts.get("skipped", 0)
                     aggregated["time"] += ts.get("time", 0.0)
 
+    # Add missing files (crashed without generating XML) to the result
+    # These files show as "MISSING" in the test file details
+    for missing_file in missing_files_list:
+        missing_identifier = extract_test_identifier(missing_file)
+        if missing_identifier and missing_identifier not in all_testsuites:
+            all_testsuites[missing_identifier] = {
+                "name": missing_identifier,
+                "tests": 0,
+                "passed": 0,
+                "failures": 0,
+                "errors": 0,
+                "skipped": 0,
+                "time": 0.0,
+                "status": "MISSING",  # Special status for crashed files
+            }
+
     # Convert to list and sort by name
     result = list(all_testsuites.values())
     result.sort(key=lambda x: x["name"])
@@ -253,11 +276,21 @@ def aggregate_testcases_by_file(xml_path: Path, planned_identifiers: set, planne
                 # e.g., "distributed/fsdp/test_fsdp_sharded_grad_scaler.py"
                 test_identifier = extract_test_identifier("test/" + file_attr) if not file_attr.startswith("test/") else extract_test_identifier(file_attr)
             elif classname_attr:
-                # classname is usually the test module name, e.g., "test_fsdp_sharded_grad_scaler"
-                # Convert dots to match path format if needed
-                test_identifier = classname_attr.replace(".", "/")
-                if not test_identifier.startswith("test"):
-                    test_identifier = "test/" + test_identifier
+                # classname format: "test.distributed._composable.fsdp.test_fully_shard_comm.TestFullyShardCollectiveOps"
+                # The last part is the class name, need to extract the module path
+                # e.g., extract "test.distributed._composable.fsdp.test_fully_shard_comm" (module name)
+                parts = classname_attr.split(".")
+                if len(parts) > 1:
+                    # Remove the last part (class name like TestFullyShardCollectiveOps)
+                    # Keep everything before the class name
+                    module_parts = parts[:-1]
+                    classname_attr = ".".join(module_parts)
+                # Convert to match planned_identifiers format (dot-separated, no test/ prefix)
+                # planned_identifiers format: "distributed._composable.fsdp.test_fully_shard_comm"
+                test_identifier = classname_attr
+                # Remove 'test.' prefix if present to match planned_identifiers
+                if test_identifier.startswith("test."):
+                    test_identifier = test_identifier[5:]
 
             if not test_identifier:
                 continue
@@ -391,13 +424,14 @@ def get_unhandled_special_tests(info: Dict) -> int:
 
 def discover_shard_files(
     reports_root: Path,
-) -> Tuple[Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path]]:
+) -> Tuple[Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path], Dict[int, Path]]:
     stats_files = {}
     info_files = {}
     plan_files = {}
     excluded_files = {}
     unhandled_files = {}
     xml_files = {}
+    missing_files = {}
 
     for path in reports_root.rglob("shard_*_stats.json"):
         try:
@@ -442,7 +476,15 @@ def discover_shard_files(
             continue
         xml_files[shard] = path
 
-    return stats_files, info_files, plan_files, excluded_files, unhandled_files, xml_files
+    # Discover missing files list (files that crashed and didn't generate XML)
+    for path in reports_root.rglob("shard_*_missing_files.txt"):
+        try:
+            shard = int(path.stem.split("_")[1])
+        except (IndexError, ValueError):
+            continue
+        missing_files[shard] = path
+
+    return stats_files, info_files, plan_files, excluded_files, unhandled_files, xml_files, missing_files
 
 
 def get_shard_status(stats: Dict, present: bool) -> str:
@@ -513,8 +555,13 @@ def format_testsuite_detail(stats: Dict) -> str:
     Format a single testsuite's stats for display.
 
     Format: "test_file.py: 5 passed, 2 failed, 1 error, 0 skipped, 3.2s"
+    Or for missing files: "test_file.py: MISSING (crashed, no report)"
     """
     name = sanitize_markdown_cell(stats.get("name", "unknown"))
+
+    # Check for MISSING status (file crashed without generating report)
+    if stats.get("status") == "MISSING":
+        return f"{name}: MISSING (crashed, no report)"
     passed = stats.get("passed", 0)
     failures = stats.get("failures", 0)
     errors = stats.get("errors", 0)
@@ -609,7 +656,7 @@ def main():
     expected_special_tests = parse_expected_special_tests(args.expected_special_tests_json)
     special_reports_root = Path(args.special_reports_root) if args.special_reports_root else None
 
-    stats_files, info_files, plan_files, excluded_files, unhandled_files, xml_files = discover_shard_files(reports_root)
+    stats_files, info_files, plan_files, excluded_files, unhandled_files, xml_files, missing_files_paths = discover_shard_files(reports_root)
     special_test_files = discover_special_test_files(special_reports_root)
     shard_ids = requested_shards or sorted(set(stats_files) | set(info_files))
 
@@ -632,11 +679,13 @@ def main():
         "startup_failures": 0,
         "import_failures": 0,
         "test_failures": 0,
+        "missing_files": 0,
     }
     shard_rows = []
     unique_planned_files = set()
     unique_excluded_files = set()
     unique_unhandled_tests = set()
+    unique_missing_files = set()
     selection_modes = set()
 
     for shard in shard_ids:
@@ -645,6 +694,7 @@ def main():
         plan_path = plan_files.get(shard)
         excluded_path = excluded_files.get(shard)
         unhandled_path = unhandled_files.get(shard)
+        missing_path = missing_files_paths.get(shard)
         stats = load_json_file(stats_path) if stats_path else {}
         info = load_json_file(info_path) if info_path else {}
         selected_test_entries = get_selected_test_entries(info)
@@ -654,12 +704,14 @@ def main():
         planned_files = load_text_lines(plan_path) if plan_path else []
         excluded_test_files = load_text_lines(excluded_path) if excluded_path else []
         unhandled_tests = load_text_lines(unhandled_path) if unhandled_path else []
+        missing_files_list = load_text_lines(missing_path) if missing_path else []
         present = bool(stats_path)
 
         # Parse ALL XML files to get per-test-file statistics
         # This includes Phase 1 (run_test.py) and Phase 2 (pytest fallback) results
         # Filter by planned test files to ensure we only include tests for this shard
-        testsuite_stats = aggregate_testsuite_stats_for_shard(reports_root, shard, planned_files)
+        # Include missing files that crashed without generating reports
+        testsuite_stats = aggregate_testsuite_stats_for_shard(reports_root, shard, planned_files, missing_files_list)
 
         # If testsuite_stats has entries, aggregate their totals and override incomplete status
         has_phase1_xmls = len(testsuite_stats) > 0
@@ -694,6 +746,7 @@ def main():
         unique_planned_files.update(planned_files)
         unique_excluded_files.update(excluded_test_files)
         unique_unhandled_tests.update(unhandled_tests)
+        unique_missing_files.update(missing_files_list)
         if info.get("selection_mode"):
             selection_modes.add(str(info.get("selection_mode")))
 
@@ -719,6 +772,7 @@ def main():
         totals["startup_failures"] += int(info.get("startup_failures", 0) or stats.get("startup_failures", 0))
         totals["import_failures"] += int(info.get("import_failures", 0) or stats.get("import_failures", 0))
         totals["test_failures"] += int(info.get("test_failures", 0) or stats.get("test_failures", 0))
+        totals["missing_files"] += len(missing_files_list)
 
         shard_rows.append(
             {
@@ -820,6 +874,8 @@ def main():
     ]
     if include_selected_entries:
         overview_rows.insert(9, ["Selected test entries", str(totals["selected_test_entries"])])
+    if totals["missing_files"] > 0:
+        overview_rows.append(["Missing files", f"{totals['missing_files']} crashed without report"])
     if include_special_tests:
         overview_rows.append(["Special tests expected", str(len(special_test_names))])
 
@@ -910,11 +966,13 @@ def main():
             "files_not_covered_by_requested_shards": not_covered_by_requested_shards,
             "excluded_test_files": excluded_test_files_list,
             "unhandled_special_tests": unhandled_tests_list,
+            "missing_files": sorted(unique_missing_files),
         },
         "failure_breakdown": {
             "startup_failures": totals["startup_failures"],
             "import_failures": totals["import_failures"],
             "test_failures": totals["test_failures"],
+            "missing_files": totals["missing_files"],
         },
         "shards": shard_rows,
         "failed_shards": [row for row in shard_rows if row["status"] not in ("PASSED", "NO TESTS")],

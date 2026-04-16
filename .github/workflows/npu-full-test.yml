@@ -22,15 +22,23 @@ on:
   workflow_dispatch:
     inputs:
       distributed_shards:
-        description: 'Number of shards for distributed tests (default 10)'
+        description: 'Number of shards for distributed tests (default 50)'
         required: false
-        default: '10'
+        default: '50'
         type: string
       regular_shards:
-        description: 'Number of shards for regular tests (default 40)'
+        description: 'Number of shards for regular tests (default 60)'
         required: false
-        default: '40'
+        default: '60'
         type: string
+      test_mode:
+        description: 'Test mode: "full" runs all shards, "single" runs only first shard of each type'
+        required: false
+        default: 'single'
+        type: choice
+        options:
+          - 'single'
+          - 'full'
 
 env:
   PYTHON_VERSION: '3.11'
@@ -62,21 +70,31 @@ jobs:
         id: set_matrix
         run: |
           # Get shard counts from inputs or use defaults
-          DISTRIBUTED_SHARDS=${{ inputs.distributed_shards || '10' }}
-          REGULAR_SHARDS=${{ inputs.regular_shards || '40' }}
+          DISTRIBUTED_SHARDS=${{ inputs.distributed_shards || '50' }}
+          REGULAR_SHARDS=${{ inputs.regular_shards || '60' }}
+          TEST_MODE=${{ inputs.test_mode || 'single' }}
 
-          # Build distributed shard matrix (1 to DISTRIBUTED_SHARDS)
-          DIST_SHARDS=$(seq 1 $DISTRIBUTED_SHARDS | tr '\n' ',' | sed 's/,$//')
+          # For test mode "single", only run shard 1 of each type
+          if [ "$TEST_MODE" = "single" ]; then
+            DIST_SHARDS="1"
+            REG_SHARDS="1"
+            echo "Test mode: SINGLE (only first shard of each type)"
+          else
+            # Build distributed shard matrix (1 to DISTRIBUTED_SHARDS)
+            DIST_SHARDS=$(seq 1 $DISTRIBUTED_SHARDS | tr '\n' ',' | sed 's/,$//')
+            # Build regular shard matrix (1 to REGULAR_SHARDS)
+            REG_SHARDS=$(seq 1 $REGULAR_SHARDS | tr '\n' ',' | sed 's/,$//')
+            echo "Test mode: FULL (all shards)"
+          fi
+
           echo "distributed_matrix=[${DIST_SHARDS}]" >> $GITHUB_OUTPUT
           echo "distributed_shards=${DISTRIBUTED_SHARDS}" >> $GITHUB_OUTPUT
 
-          # Build regular shard matrix (1 to REGULAR_SHARDS)
-          REG_SHARDS=$(seq 1 $REGULAR_SHARDS | tr '\n' ',' | sed 's/,$//')
           echo "regular_matrix=[${REG_SHARDS}]" >> $GITHUB_OUTPUT
           echo "regular_shards=${REGULAR_SHARDS}" >> $GITHUB_OUTPUT
 
-          echo "Distributed tests: $DISTRIBUTED_SHARDS shards"
-          echo "Regular tests: $REGULAR_SHARDS shards"
+          echo "Distributed tests: ${DISTRIBUTED_SHARDS} shards (matrix: ${DIST_SHARDS})"
+          echo "Regular tests: ${REGULAR_SHARDS} shards (matrix: ${REG_SHARDS})"
 
       - name: Clone PyTorch v${{ env.PYTORCH_VERSION }} (for test source)
         run: |
@@ -143,7 +161,7 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # Distributed Tests: linux-aarch64-a3-8 runner, serial execution, 10 shards
+  # Distributed Tests: linux-aarch64-a3-8 runner, serial execution, 50 shards
   # ============================================================================
   test_distributed:
     needs:
@@ -157,7 +175,7 @@ jobs:
       matrix:
         shard: ${{ fromJson(needs.prepare.outputs.distributed_matrix) }}
       fail-fast: false
-      max-parallel: 10
+      max-parallel: 50
 
     steps:
       - name: Checkout current repository (for test runner)
@@ -297,7 +315,7 @@ jobs:
           if-no-files-found: warn
 
   # ============================================================================
-  # Regular Tests: linux-aarch64-a3-2 runner, parallel=2, 40 shards
+  # Regular Tests: linux-aarch64-a3-2 runner, parallel=2, 60 shards
   # ============================================================================
   test_regular:
     needs:
@@ -311,7 +329,7 @@ jobs:
       matrix:
         shard: ${{ fromJson(needs.prepare.outputs.regular_matrix) }}
       fail-fast: false
-      max-parallel: 40
+      max-parallel: 60
 
     steps:
       - name: Checkout current repository (for test runner)

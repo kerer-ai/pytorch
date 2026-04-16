@@ -24,26 +24,26 @@ import signal
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
 from typing import Dict, List, Tuple
+import threading
 
 
-# Shard type constants
+# Shard type constants (for reference, actual shard count is passed via --num-shards)
+# Distributed tests: shard 1-50 (50 shards, serial execution for crash isolation)
 SHARD_DISTRIBUTED_START = 1
 SHARD_DISTRIBUTED_END = 50
 SHARD_DISTRIBUTED_TOTAL = 50
 
-SHARD_EXCLUDED_START = 51
-SHARD_EXCLUDED_END = 51
-SHARD_EXCLUDED_TOTAL = 1
+# Regular tests: shard 51-110 (60 shards, parallel execution with 2 workers)
+SHARD_REGULAR_START = 51
+SHARD_REGULAR_END = 110
+SHARD_REGULAR_TOTAL = 60
 
-SHARD_REGULAR_START = 52
-SHARD_REGULAR_END = 101
-SHARD_REGULAR_TOTAL = 50
-
-TOTAL_SHARDS = 101
+TOTAL_SHARDS = 110
 
 # Test files that should never be run in parallel with other test files.
 # Borrowed from PyTorch's run_test.py RUN_PARALLEL_BLOCKLIST + CI_SERIAL_LIST.
@@ -182,14 +182,12 @@ def get_shard_type(shard: int) -> Tuple[str, int, int]:
 
     Returns:
         Tuple of (shard_type, shard_index, shard_total)
-        - shard_type: "distributed", "excluded", or "regular"
+        - shard_type: "distributed" or "regular"
         - shard_index: Index within the shard type (1-indexed)
         - shard_total: Total number of shards for this type
     """
     if SHARD_DISTRIBUTED_START <= shard <= SHARD_DISTRIBUTED_END:
         return ("distributed", shard - SHARD_DISTRIBUTED_START + 1, SHARD_DISTRIBUTED_TOTAL)
-    elif SHARD_EXCLUDED_START <= shard <= SHARD_EXCLUDED_END:
-        return ("excluded", shard - SHARD_EXCLUDED_START + 1, SHARD_EXCLUDED_TOTAL)
     else:
         return ("regular", shard - SHARD_REGULAR_START + 1, SHARD_REGULAR_TOTAL)
 
@@ -232,6 +230,18 @@ def parse_args():
         action="store_true",
         default=False,
         help="Use raw file discovery (scan all test_*.py) instead of TESTS list. Default: False",
+    )
+    parser.add_argument(
+        "--per-file-isolation",
+        action="store_true",
+        default=False,
+        help=(
+            "Run each test file in its own pytest subprocess. "
+            "This prevents NPU kernel crashes from affecting other test files. "
+            "If a file crashes, it won't generate a JUnit XML report, and the summary "
+            "script will show 'Missing' for that file. Slower but more resilient. "
+            "Default: False"
+        ),
     )
     return parser.parse_args()
 
@@ -978,17 +988,21 @@ def run_tests_via_pytest(
     verbose: bool,
     parallel: int,
     shard_type: str,
-) -> Tuple[int, Dict, Dict]:
+    per_file_isolation: bool = False,
+) -> Tuple[int, Dict, Dict, List[str]]:
     """
-    Run tests directly via pytest with serial/parallel split.
+    Run tests directly via pytest with serial/parallel split or per-file isolation.
 
-    All shard types (distributed, excluded, regular) use this unified
-    execution function. Tests are split into two groups:
+    Execution modes:
 
-    1. Serial group: Files in SERIAL_TEST_FILES are run one-at-a-time
-       via individual pytest invocations (no -n flag).
-    2. Parallel group: Remaining files are run together with pytest-xdist
-       for file-level parallelism (-n=parallel --dist=loadfile).
+    1. Per-file isolation mode (per_file_isolation=True):
+       Each test file runs in its own pytest subprocess. This prevents NPU kernel
+       crashes from affecting other test files. If a file crashes, it won't generate
+       a JUnit XML report, and the summary script will show "Missing" for that file.
+
+    2. Normal mode (per_file_isolation=False):
+       - Serial group: Files in SERIAL_TEST_FILES are run one-at-a-time
+       - Parallel group: Remaining files run together with pytest-xdist
 
     Args:
         planned_tests: List of test file paths (with 'test/' prefix)
@@ -1000,15 +1014,20 @@ def run_tests_via_pytest(
         verbose: Verbose output flag
         parallel: Number of parallel workers (pytest-xdist)
         shard_type: "distributed", "excluded", or "regular"
+        per_file_isolation: If True, each file runs in isolated subprocess
 
     Returns:
-        Tuple of (returncode, stats, log_metrics)
+        Tuple of (returncode, stats, log_metrics, missing_files)
+        missing_files: List of test files that crashed and didn't generate XML report
     """
     start = monotonic()
     log_file = get_shard_log_file(report_dir, shard)
 
     merged_env = os.environ.copy()
     merged_env.update(env_updates)
+
+    # Track which files generated XML reports
+    executed_files = {}  # test_file -> {"xml_expected": Path, "xml_generated": bool, "returncode": int}
 
     # Split tests into serial and parallel groups
     serial_tests = [t for t in planned_tests if is_serial_test(t)]
@@ -1020,6 +1039,8 @@ def run_tests_via_pytest(
         log_handle.write("=" * 60 + "\n")
         log_handle.write(f"Direct pytest execution ({shard_type} shard)\n")
         log_handle.write("=" * 60 + "\n")
+        if per_file_isolation:
+            log_handle.write("Execution mode: PER-FILE ISOLATION (each file in separate subprocess)\n")
         log_handle.write(f"Total test files: {len(planned_tests)}\n")
         log_handle.write(f"Serial test files: {len(serial_tests)}\n")
         log_handle.write(f"Parallel test files: {len(parallel_tests)}\n")
@@ -1027,29 +1048,155 @@ def run_tests_via_pytest(
         log_handle.write("=" * 60 + "\n\n")
         log_handle.flush()
 
-        # --- Phase 1: Serial tests (one-at-a-time) ---
-        if serial_tests:
-            log_handle.write(f"--- Serial phase: {len(serial_tests)} files ---\n\n")
+        if per_file_isolation:
+            # --- Per-file isolation mode: each file runs in separate subprocess ---
+            # Use ThreadPoolExecutor for parallel execution with crash isolation
+            isolation_parallel = parallel if parallel > 0 else 2  # Default to 2 workers if not specified
+            log_handle.write(f"--- Per-file isolation mode: {len(planned_tests)} files ({isolation_parallel} parallel workers) ---\n\n")
             log_handle.flush()
-            print(f"\n[Serial phase] Running {len(serial_tests)} files one-at-a-time:")
+            print(f"\n[Per-file isolation mode] Running {len(planned_tests)} files with {isolation_parallel} parallel workers:")
+            print("      Each file runs in its own subprocess for crash isolation")
 
-            for idx, test_file in enumerate(serial_tests, 1):
+            # Thread lock for synchronized log writing
+            log_lock = threading.Lock()
+
+            def run_single_file_isolated(test_file: str, idx: int) -> Tuple[str, int, bool, str]:
+                """
+                Run a single test file in isolated subprocess.
+
+                Returns: (test_file, returncode, xml_generated, test_name)
+                """
                 test_name = strip_test_prefix_and_suffix(test_file)
-                # Sanitize test_name for use in filename (replace / with _)
                 safe_name = test_name.replace("/", "_")
+                expected_xml = report_dir / f"shard_{shard}_pytest_{safe_name}.xml"
+
                 command = build_pytest_command(
                     [test_file],
                     report_dir,
                     shard,
                     timeout,
                     verbose,
-                    parallel=0,
+                    parallel=0,  # No xdist within the file
                     shard_type=shard_type,
                     xml_suffix=f"_{safe_name}",
                 )
 
-                print(f"  [{idx}/{len(serial_tests)}] {test_name}")
-                log_handle.write(f"[Serial {idx}/{len(serial_tests)}] {test_name}\n")
+                # Write per-file log to separate file for isolation
+                file_log_path = report_dir / f"shard_{shard}_log_{safe_name}.txt"
+
+                with log_lock:
+                    log_handle.write(f"\n[File {idx}/{len(planned_tests)}] {test_name}\n")
+                    log_handle.write(f"  Expected XML: {expected_xml.name}\n")
+                    log_handle.write(f"  Command: {' '.join(command)}\n")
+                    log_handle.flush()
+
+                print(f"  [{idx}/{len(planned_tests)}] {test_name} (parallel worker)")
+
+                # Run pytest subprocess, capture output to per-file log
+                rc = _run_pytest_subprocess_to_file(command, test_dir, merged_env, file_log_path)
+
+                # Check if XML was generated
+                xml_generated = expected_xml.exists()
+
+                # Append per-file log to main log
+                if file_log_path.exists():
+                    with log_lock:
+                        try:
+                            file_log_content = file_log_path.read_text(encoding="utf-8", errors="replace")
+                            log_handle.write(file_log_content)
+                            if xml_generated:
+                                log_handle.write(f"  Result: XML generated (returncode={rc})\n")
+                            else:
+                                log_handle.write(f"  Result: NO XML (returncode={rc}) - file may have crashed\n")
+                            log_handle.flush()
+                        except Exception:
+                            pass
+
+                if not xml_generated:
+                    print(f"    Warning: No XML report generated for {test_name}")
+
+                return (test_file, rc, xml_generated, test_name)
+
+            # Execute files in parallel using ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=isolation_parallel) as executor:
+                futures = {}
+                for idx, test_file in enumerate(planned_tests, 1):
+                    future = executor.submit(run_single_file_isolated, test_file, idx)
+                    futures[future] = test_file
+
+                # Collect results as they complete
+                for future in as_completed(futures):
+                    test_file, rc, xml_generated, test_name = future.result()
+                    executed_files[test_file] = {
+                        "xml_expected": report_dir / f"shard_{shard}_pytest_{test_name.replace('/', '_')}.xml",
+                        "xml_generated": xml_generated,
+                        "returncode": rc,
+                        "test_name": test_name,
+                    }
+                    if rc != 0 and rc != 5:
+                        worst_returncode = rc if worst_returncode == 0 else worst_returncode
+
+        else:
+            # --- Normal mode: serial/parallel split ---
+            # --- Phase 1: Serial tests (one-at-a-time) ---
+            if serial_tests:
+                log_handle.write(f"--- Serial phase: {len(serial_tests)} files ---\n\n")
+                log_handle.flush()
+                print(f"\n[Serial phase] Running {len(serial_tests)} files one-at-a-time:")
+
+                for idx, test_file in enumerate(serial_tests, 1):
+                    test_name = strip_test_prefix_and_suffix(test_file)
+                    # Sanitize test_name for use in filename (replace / with _)
+                    safe_name = test_name.replace("/", "_")
+                    expected_xml = report_dir / f"shard_{shard}_pytest_{safe_name}.xml"
+
+                    executed_files[test_file] = {
+                        "xml_expected": expected_xml,
+                        "xml_generated": False,
+                        "returncode": None,
+                        "test_name": test_name,
+                    }
+
+                    command = build_pytest_command(
+                        [test_file],
+                        report_dir,
+                        shard,
+                        timeout,
+                        verbose,
+                        parallel=0,
+                        shard_type=shard_type,
+                        xml_suffix=f"_{safe_name}",
+                    )
+
+                    print(f"  [{idx}/{len(serial_tests)}] {test_name}")
+                    log_handle.write(f"[Serial {idx}/{len(serial_tests)}] {test_name}\n")
+                    log_handle.write(f"  Command: {' '.join(command)}\n")
+                    log_handle.flush()
+
+                    rc = _run_pytest_subprocess(command, test_dir, merged_env, log_handle)
+                    executed_files[test_file]["returncode"] = rc
+                    executed_files[test_file]["xml_generated"] = expected_xml.exists()
+
+                    if rc != 0 and rc != 5:
+                        worst_returncode = rc if worst_returncode == 0 else worst_returncode
+
+            # --- Phase 2: Parallel tests (all at once with -n=parallel) ---
+            if parallel_tests:
+                log_handle.write(f"\n--- Parallel phase: {len(parallel_tests)} files (workers: {parallel}) ---\n\n")
+                log_handle.flush()
+                print(f"\n[Parallel phase] Running {len(parallel_tests)} files with {parallel} workers:")
+
+                command = build_pytest_command(
+                    parallel_tests,
+                    report_dir,
+                    shard,
+                    timeout,
+                    verbose,
+                    parallel=parallel,
+                    shard_type=shard_type,
+                )
+
+                print("  " + " ".join(command))
                 log_handle.write(f"  Command: {' '.join(command)}\n")
                 log_handle.flush()
 
@@ -1057,29 +1204,30 @@ def run_tests_via_pytest(
                 if rc != 0 and rc != 5:
                     worst_returncode = rc if worst_returncode == 0 else worst_returncode
 
-        # --- Phase 2: Parallel tests (all at once with -n=parallel) ---
-        if parallel_tests:
-            log_handle.write(f"\n--- Parallel phase: {len(parallel_tests)} files (workers: {parallel}) ---\n\n")
-            log_handle.flush()
-            print(f"\n[Parallel phase] Running {len(parallel_tests)} files with {parallel} workers:")
+                # For parallel tests, we don't have per-file XML tracking
+                # The single XML covers all parallel tests
+                parallel_xml = report_dir / f"shard_{shard}_pytest.xml"
+                for test_file in parallel_tests:
+                    executed_files[test_file] = {
+                        "xml_expected": parallel_xml,
+                        "xml_generated": parallel_xml.exists(),
+                        "returncode": rc,
+                        "test_name": strip_test_prefix_and_suffix(test_file),
+                    }
 
-            command = build_pytest_command(
-                parallel_tests,
-                report_dir,
-                shard,
-                timeout,
-                verbose,
-                parallel=parallel,
-                shard_type=shard_type,
-            )
+    # --- Identify missing files (crashed without generating XML) ---
+    missing_files = []
+    for test_file, info in executed_files.items():
+        if not info["xml_generated"]:
+            missing_files.append(test_file)
 
-            print("  " + " ".join(command))
-            log_handle.write(f"  Command: {' '.join(command)}\n")
-            log_handle.flush()
-
-            rc = _run_pytest_subprocess(command, test_dir, merged_env, log_handle)
-            if rc != 0 and rc != 5:
-                worst_returncode = rc if worst_returncode == 0 else worst_returncode
+    # Save missing files list for summary script
+    if missing_files:
+        missing_file_path = report_dir / f"shard_{shard}_missing_files.txt"
+        with missing_file_path.open("w", encoding="utf-8") as f:
+            for test_file in missing_files:
+                f.write(f"{test_file}\n")
+        print(f"\nWarning: {len(missing_files)} files did not generate XML reports (likely crashed)")
 
     # --- Aggregate stats from all generated XML files ---
     xml_files = sorted(report_dir.glob(f"shard_{shard}_pytest*.xml"))
@@ -1088,6 +1236,8 @@ def run_tests_via_pytest(
     stats["junit_xml_files"] = len(xml_files)
     stats["serial_test_files"] = len(serial_tests)
     stats["parallel_test_files"] = len(parallel_tests)
+    stats["per_file_isolation"] = per_file_isolation
+    stats["missing_files_count"] = len(missing_files)
 
     # Handle returncode=5 (no tests collected) as success when no real failures
     returncode = worst_returncode
@@ -1100,6 +1250,7 @@ def run_tests_via_pytest(
 
     log_metrics = analyze_pytest_log(log_file, worst_returncode)
     log_metrics["test_failures"] = stats.get("failed", 0) + stats.get("errors", 0)
+    log_metrics["missing_files_count"] = len(missing_files)
     stats.update(log_metrics)
 
     if returncode != 0:
@@ -1107,7 +1258,7 @@ def run_tests_via_pytest(
     else:
         print(f"\n{shard_type.capitalize()} shard tests completed successfully")
 
-    return returncode, stats, log_metrics
+    return returncode, stats, log_metrics, missing_files
 
 
 def _run_pytest_subprocess(
@@ -1140,6 +1291,55 @@ def _run_pytest_subprocess(
             sys.stdout.write(line)
             sys.stdout.flush()
             log_handle.write(line)
+        raw_returncode = process.wait()
+    except BaseException:
+        process.kill()
+        raw_returncode = 1
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+
+    return raw_returncode
+
+
+def _run_pytest_subprocess_to_file(
+    command: List[str],
+    cwd: Path,
+    env: Dict[str, str],
+    log_file: Path,
+) -> int:
+    """
+    Run a pytest subprocess, capturing output to a file (for parallel execution).
+
+    This function is used in per-file isolation mode where multiple files run
+    concurrently. Each file's output is captured to a separate file, then merged
+    into the main log after completion.
+
+    Returns the process return code.
+    """
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+
+    raw_returncode = 0
+    try:
+        with log_file.open("w", encoding="utf-8") as f:
+            assert process.stdout is not None
+            for line in process.stdout:
+                f.write(line)
+                # Also print to stdout for real-time visibility
+                sys.stdout.write(line)
+                sys.stdout.flush()
         raw_returncode = process.wait()
     except BaseException:
         process.kill()
@@ -1245,7 +1445,9 @@ def main():
         "raw_file_scan_for_excluded_tests": "raw file scan for excluded tests (blocklisted patterns/tests)",
     }
     print(f"Test discovery mode: {info['test_discovery_mode']} ({discovery_desc.get(info['test_discovery_mode'], 'unknown')})")
-    print(f"Parallel workers (pytest-xdist): {args.parallel}")
+    print(f"Parallel workers requested: {args.parallel}")
+    if shard_type == "distributed" and not args.per_file_isolation and args.parallel == 2:
+        print("  (distributed tests will auto-switch to serial per-file isolation for crash safety)")
     if crashed_config_file:
         print(f"Crashed files config: {crashed_config_file}")
         print(f"Crashed files excluded: {info['crashed_excluded_files']}")
@@ -1272,11 +1474,35 @@ def main():
 
     env_updates = build_execution_env(test_dir, script_dir, args.disabled_testcases, str(report_dir), args.shard)
 
+    missing_files = []
     if planned_tests:
-        # All shard types run directly via pytest with serial/parallel split
-        effective_parallel = args.parallel
-        print(f"Note: Running {len(planned_tests)} {shard_type} tests via direct pytest (parallel: {effective_parallel})")
-        _, stats, log_metrics = run_tests_via_pytest(
+        # Auto-select execution strategy based on test type:
+        # - distributed: per-file isolation with serial execution (parallel=1) for crash safety
+        # - regular: normal execution with parallel workers (parallel=2) for speed
+        # User can override with --per-file-isolation and --parallel flags
+        auto_per_file_isolation = args.per_file_isolation
+        auto_parallel = args.parallel
+
+        # Default strategy: distributed tests use serial per-file isolation, regular tests use parallel
+        if shard_type == "distributed":
+            # Distributed tests often cause NPU kernel crashes, use serial execution for isolation
+            # unless user explicitly sets different parameters
+            if not args.per_file_isolation and args.parallel == 2:  # Default values, auto-switch
+                auto_per_file_isolation = True
+                auto_parallel = 1  # Serial execution (one file at a time)
+                print(f"Note: Distributed tests auto-switched to PER-FILE ISOLATION (serial execution)")
+                print("      This prevents NPU kernel crashes from affecting other test files")
+                print("      Use --parallel N to run N files concurrently in isolation mode")
+            elif args.per_file_isolation and args.parallel > 1:
+                print(f"Note: Running {len(planned_tests)} distributed tests in PER-FILE ISOLATION mode")
+                print(f"      with {auto_parallel} parallel workers (crash isolation + concurrency)")
+            else:
+                print(f"Note: Running {len(planned_tests)} distributed tests via direct pytest")
+        else:
+            # Regular tests: use normal parallel execution (faster, less crash-prone)
+            print(f"Note: Running {len(planned_tests)} {shard_type} tests via direct pytest (parallel: {auto_parallel})")
+
+        _, stats, log_metrics, missing_files = run_tests_via_pytest(
             planned_tests,
             args.shard,
             test_dir,
@@ -1284,9 +1510,13 @@ def main():
             env_updates,
             args.timeout,
             args.verbose,
-            effective_parallel,
+            auto_parallel,
             shard_type,
+            per_file_isolation=auto_per_file_isolation,
         )
+        info["per_file_isolation"] = auto_per_file_isolation
+        info["effective_parallel"] = auto_parallel
+        info["missing_files_count"] = len(missing_files)
     else:
         print("No test files assigned to this shard after file-level filtering.")
         stats = finalize_stats(create_empty_stats(), 0, 0.0)
@@ -1295,6 +1525,7 @@ def main():
             "startup_failures": 0,
             "import_failures": 0,
             "test_failures": 0,
+            "missing_files_count": 0,
         }
 
     info["junit_generated"] = bool(stats.get("junit_generated", False))
