@@ -44,11 +44,9 @@ jobs:
       PYTHON_VERSION: ${{ inputs.python_version }}
 
     steps:
-      - name: Checkout repository (handle PR from fork)
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 1
           submodules: recursive
 
