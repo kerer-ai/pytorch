@@ -22,23 +22,15 @@ on:
   workflow_dispatch:
     inputs:
       distributed_shards:
-        description: 'Number of shards for distributed tests (default 50)'
+        description: 'Number of shards for distributed tests (default 10)'
         required: false
-        default: '50'
+        default: '10'
         type: string
       regular_shards:
-        description: 'Number of shards for regular tests (default 60)'
+        description: 'Number of shards for regular tests (default 40)'
         required: false
-        default: '60'
+        default: '40'
         type: string
-      test_mode:
-        description: 'Test mode: "full" runs all shards, "single" runs only first shard of each type'
-        required: false
-        default: 'single'
-        type: choice
-        options:
-          - 'single'
-          - 'full'
 
 env:
   PYTHON_VERSION: '3.11'
@@ -69,31 +61,14 @@ jobs:
       - name: Set shard matrices
         id: set_matrix
         run: |
-          # Get shard counts from inputs or use defaults
-          DISTRIBUTED_SHARDS=${{ inputs.distributed_shards || '50' }}
-          REGULAR_SHARDS=${{ inputs.regular_shards || '60' }}
+          # Get shard counts from inputs or use defaults (total 50 shards: 10 distributed + 40 regular)
+          DISTRIBUTED_SHARDS=${{ inputs.distributed_shards || '10' }}
+          REGULAR_SHARDS=${{ inputs.regular_shards || '40' }}
 
-          # For schedule events, always run full test (all shards)
-          # For other events, respect test_mode input
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            TEST_MODE="full"
-            echo "Schedule event detected: forcing FULL test mode"
-          else
-            TEST_MODE=${{ inputs.test_mode || 'single' }}
-          fi
-
-          # For test mode "single", only run shard 1 of each type
-          if [ "$TEST_MODE" = "single" ]; then
-            DIST_SHARDS="1"
-            REG_SHARDS="1"
-            echo "Test mode: SINGLE (only first shard of each type)"
-          else
-            # Build distributed shard matrix (1 to DISTRIBUTED_SHARDS)
-            DIST_SHARDS=$(seq 1 $DISTRIBUTED_SHARDS | tr '\n' ',' | sed 's/,$//')
-            # Build regular shard matrix (1 to REGULAR_SHARDS)
-            REG_SHARDS=$(seq 1 $REGULAR_SHARDS | tr '\n' ',' | sed 's/,$//')
-            echo "Test mode: FULL (all shards)"
-          fi
+          # Build distributed shard matrix (1 to DISTRIBUTED_SHARDS)
+          DIST_SHARDS=$(seq 1 $DISTRIBUTED_SHARDS | tr '\n' ',' | sed 's/,$//')
+          # Build regular shard matrix (1 to REGULAR_SHARDS)
+          REG_SHARDS=$(seq 1 $REGULAR_SHARDS | tr '\n' ',' | sed 's/,$//')
 
           echo "distributed_matrix=[${DIST_SHARDS}]" >> $GITHUB_OUTPUT
           echo "distributed_shards=${DISTRIBUTED_SHARDS}" >> $GITHUB_OUTPUT
@@ -103,6 +78,7 @@ jobs:
 
           echo "Distributed tests: ${DISTRIBUTED_SHARDS} shards (matrix: ${DIST_SHARDS})"
           echo "Regular tests: ${REGULAR_SHARDS} shards (matrix: ${REG_SHARDS})"
+          echo "Total shards: $((${DISTRIBUTED_SHARDS} + ${REGULAR_SHARDS}))"
 
       - name: Clone PyTorch v${{ env.PYTORCH_VERSION }} (for test source)
         run: |
@@ -183,7 +159,7 @@ jobs:
       matrix:
         shard: ${{ fromJson(needs.prepare.outputs.distributed_matrix) }}
       fail-fast: false
-      max-parallel: 50
+      max-parallel: 10
 
     steps:
       - name: Checkout repository
@@ -337,7 +313,7 @@ jobs:
       matrix:
         shard: ${{ fromJson(needs.prepare.outputs.regular_matrix) }}
       fail-fast: false
-      max-parallel: 60
+      max-parallel: 40
 
     steps:
       - name: Checkout repository
