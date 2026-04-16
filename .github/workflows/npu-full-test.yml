@@ -495,14 +495,7 @@ jobs:
           # Combine both shard matrices for reporting
           DIST_MATRIX='${{ needs.prepare.outputs.distributed_matrix }}'
           REG_MATRIX='${{ needs.prepare.outputs.regular_matrix }}'
-          COMBINED_MATRIX=$(echo "${DIST_MATRIX} ${REG_MATRIX}" | python3 -c "
-            import sys, json
-            dist = json.loads(sys.argv[1])
-            reg = json.loads(sys.argv[2])
-            # Combine and create unique shard identifiers with type prefix
-            combined = ['dist-' + str(s) for s in dist] + ['reg-' + str(s) for s in reg]
-            print(json.dumps(combined))
-          ")
+          COMBINED_MATRIX=$(python3 -c "import sys,json; dist=json.loads('${DIST_MATRIX}'); reg=json.loads('${REG_MATRIX}'); print(json.dumps(['dist-'+str(s) for s in dist]+['reg-'+str(s) for s in reg]))")
 
           $PYTHON .github/scripts/generate_npu_full_test_report.py \
             --reports-root all-test-reports \
