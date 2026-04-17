@@ -316,7 +316,7 @@ jobs:
           if-no-files-found: warn
 
   # ============================================================================
-  # Regular Tests: linux-aarch64-a3-2 runner, parallel=2, default 40 shards
+  # Regular Tests: linux-aarch64-a3-2 runner, serial execution (parallel=1), default 40 shards
   # ============================================================================
   test_regular:
     needs:
@@ -430,7 +430,7 @@ jobs:
 
           mkdir -p ${REPORT_DIR}
 
-          # Regular tests: parallel execution (2 workers)
+          # Regular tests: serial execution (1 worker) to avoid OOM
           set +e
           $PYTHON ascend_pytorch/.github/scripts/run_npu_test_shard.py \
             --shard ${{ matrix.shard }} \
@@ -441,7 +441,7 @@ jobs:
             --case-paths-config pytorch-test-src/test_upstream/case_paths_ci.yml \
             --report-dir ${REPORT_DIR} \
             --timeout 600 \
-            --parallel 2 \
+            --parallel 1 \
             2>&1 | tee /tmp/test_shard_reg_${{ matrix.shard }}.log
 
           TEST_STATUS=${PIPESTATUS[0]}
