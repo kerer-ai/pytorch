@@ -1502,8 +1502,29 @@ def main():
             else:
                 print(f"Note: Running {len(planned_tests)} distributed tests via direct pytest with per-file isolation")
         else:
-            # Regular tests: use normal parallel execution (faster, less crash-prone)
-            print(f"Note: Running {len(planned_tests)} {shard_type} tests via direct pytest (parallel: {auto_parallel})")
+            # Regular tests: also use per-file isolation for crash safety
+            # Each file runs in its own subprocess, preventing crashes from affecting other files
+            # This ensures that even if one test file causes a segfault, other files continue
+            # and each file generates its own XML report (no MISSING status due to crash)
+            if not args.per_file_isolation:
+                auto_per_file_isolation = True
+                # Use user's parallel setting for concurrent isolated execution,
+                # or default to serial (parallel=1) for maximum safety
+                if args.parallel <= 1:
+                    auto_parallel = 1  # Serial execution (one file at a time)
+                    print(f"Note: Regular tests auto-switched to PER-FILE ISOLATION (serial execution)")
+                    print("      Each file runs in separate subprocess for crash isolation")
+                else:
+                    # User specified parallel > 1, use it for concurrent isolated execution
+                    auto_parallel = args.parallel
+                    print(f"Note: Regular tests auto-switched to PER-FILE ISOLATION mode")
+                    print(f"      Running {auto_parallel} files concurrently in isolation")
+                print("      This prevents test crashes from affecting other files or losing all XML reports")
+            elif args.per_file_isolation and args.parallel > 1:
+                print(f"Note: Running {len(planned_tests)} regular tests in PER-FILE ISOLATION mode")
+                print(f"      with {auto_parallel} parallel workers (crash isolation + concurrency)")
+            else:
+                print(f"Note: Running {len(planned_tests)} regular tests via per-file isolation")
 
         _, stats, log_metrics, missing_files = run_tests_via_pytest(
             planned_tests,
