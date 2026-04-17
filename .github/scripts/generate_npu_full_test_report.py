@@ -831,15 +831,23 @@ def main():
                 xml_totals["skipped"] += ts.get("skipped", 0)
                 xml_totals["time"] += ts.get("time", 0.0)
 
-            # Override incomplete status if we have Phase 1 XMLs
-            if stats.get("incomplete") and xml_totals["tests"] > 0:
-                stats["incomplete"] = False
-                stats["total"] = xml_totals["tests"]
-                stats["passed"] = xml_totals["passed"]
-                stats["failed"] = xml_totals["failures"]
-                stats["errors"] = xml_totals["errors"]
-                stats["skipped"] = xml_totals["skipped"]
-                # Keep original duration from stats if available
+            # Use XML data to fill stats if:
+            # 1. stats.json doesn't exist (stats is empty) but we have XML data
+            # 2. stats.json exists but is incomplete and we have XML data to override
+            # This ensures per-file isolation mode shards get correct totals even without stats.json
+            if xml_totals["tests"] > 0:
+                # Always fill stats from XML if stats is empty or incomplete
+                if not stats or stats.get("incomplete"):
+                    stats["incomplete"] = False
+                    stats["total"] = xml_totals["tests"]
+                    stats["passed"] = xml_totals["passed"]
+                    stats["failed"] = xml_totals["failures"]
+                    stats["errors"] = xml_totals["errors"]
+                    stats["skipped"] = xml_totals["skipped"]
+                    stats["duration"] = xml_totals["time"]
+                    # Mark as present if we have XML data (even without stats.json)
+                    if not present:
+                        present = True
 
         unique_planned_files.update(planned_files)
         unique_excluded_files.update(excluded_test_files)
