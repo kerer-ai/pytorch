@@ -176,15 +176,16 @@ def aggregate_testsuite_stats_for_shard(
     print(f"DEBUG aggregate_testsuite_stats_for_shard: shard_type={shard_type}, shard={shard}")
     print(f"DEBUG: reports_root={reports_root}, exists={reports_root.exists()}")
     if reports_root.exists():
-        all_xml_files = list(reports_root.glob("*.xml"))
-        print(f"DEBUG: Total XML files in reports_root: {len(all_xml_files)}")
-        matching_xml_files = list(reports_root.glob(f"shard_{type_prefix}-{shard}_pytest*.xml"))
-        print(f"DEBUG: Matching XML files for shard_{type_prefix}-{shard}_pytest*.xml: {len(matching_xml_files)}")
+        all_xml_files = list(reports_root.rglob("*.xml"))
+        print(f"DEBUG: Total XML files in reports_root (rglob): {len(all_xml_files)}")
+        matching_xml_files = list(reports_root.rglob(f"shard_{type_prefix}-{shard}_pytest*.xml"))
+        print(f"DEBUG: Matching XML files for shard_{type_prefix}-{shard}_pytest*.xml (rglob): {len(matching_xml_files)}")
         for xf in matching_xml_files[:5]:
-            print(f"DEBUG:   - {xf.name}")
+            print(f"DEBUG:   - {xf.relative_to(reports_root)}")
 
     # Find all XML files for this shard: shard_{type}-{shard}_pytest*.xml
-    for xml_path in reports_root.glob(f"shard_{type_prefix}-{shard}_pytest*.xml"):
+    # Use rglob to search recursively (files may be in subdirectories due to artifact merge)
+    for xml_path in reports_root.rglob(f"shard_{type_prefix}-{shard}_pytest*.xml"):
         # Parse testcase elements and aggregate by file attribute
         test_file_stats = aggregate_testcases_by_file(xml_path, planned_identifiers, planned_test_names)
         for test_id, stats in test_file_stats.items():
