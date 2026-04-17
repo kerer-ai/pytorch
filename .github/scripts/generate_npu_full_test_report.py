@@ -165,8 +165,23 @@ def aggregate_testsuite_stats_for_shard(
         name = Path(planned).name.replace(".py", "")
         planned_test_names.add(name)
 
+    print(f"DEBUG: planned_files count={len(planned_files)}, planned_identifiers count={len(planned_identifiers)}")
+    if planned_identifiers:
+        print(f"DEBUG: First 3 planned_identifiers: {list(planned_identifiers)[:3]}")
+
     # Convert shard_type to file prefix ("distributed" -> "dist", "regular" -> "reg")
     type_prefix = "dist" if shard_type == "distributed" else "reg"
+
+    # Debug: List all files in reports_root
+    print(f"DEBUG aggregate_testsuite_stats_for_shard: shard_type={shard_type}, shard={shard}")
+    print(f"DEBUG: reports_root={reports_root}, exists={reports_root.exists()}")
+    if reports_root.exists():
+        all_xml_files = list(reports_root.glob("*.xml"))
+        print(f"DEBUG: Total XML files in reports_root: {len(all_xml_files)}")
+        matching_xml_files = list(reports_root.glob(f"shard_{type_prefix}-{shard}_pytest*.xml"))
+        print(f"DEBUG: Matching XML files for shard_{type_prefix}-{shard}_pytest*.xml: {len(matching_xml_files)}")
+        for xf in matching_xml_files[:5]:
+            print(f"DEBUG:   - {xf.name}")
 
     # Find all XML files for this shard: shard_{type}-{shard}_pytest*.xml
     for xml_path in reports_root.glob(f"shard_{type_prefix}-{shard}_pytest*.xml"):
@@ -266,6 +281,7 @@ def aggregate_testcases_by_file(xml_path: Path, planned_identifiers: set, planne
     If planned_identifiers is empty, accept all testcases.
     """
     result = {}
+    debug_count = 0
 
     try:
         tree = ET.parse(xml_path)
@@ -273,6 +289,7 @@ def aggregate_testcases_by_file(xml_path: Path, planned_identifiers: set, planne
 
         # Find all testcase elements
         testcases = root.findall(".//testcase")
+        print(f"DEBUG aggregate_testcases_by_file: {xml_path.name}, testcases={len(testcases)}, planned_ids={len(planned_identifiers)}")
 
         for testcase in testcases:
             file_attr = testcase.get("file", "")
@@ -284,6 +301,9 @@ def aggregate_testcases_by_file(xml_path: Path, planned_identifiers: set, planne
             if file_attr:
                 # e.g., "distributed/fsdp/test_fsdp_sharded_grad_scaler.py"
                 test_identifier = extract_test_identifier("test/" + file_attr) if not file_attr.startswith("test/") else extract_test_identifier(file_attr)
+                if debug_count < 3:
+                    print(f"DEBUG: file_attr='{file_attr}' -> test_identifier='{test_identifier}'")
+                    debug_count += 1
             elif classname_attr:
                 # classname format: "test.distributed._composable.fsdp.test_fully_shard_comm.TestFullyShardCollectiveOps"
                 # The last part is the class name, need to extract the module path
@@ -300,6 +320,9 @@ def aggregate_testcases_by_file(xml_path: Path, planned_identifiers: set, planne
                 # Remove 'test.' prefix if present to match planned_identifiers
                 if test_identifier.startswith("test."):
                     test_identifier = test_identifier[5:]
+                if debug_count < 3:
+                    print(f"DEBUG: classname_attr='{classname_attr}' -> test_identifier='{test_identifier}'")
+                    debug_count += 1
 
             if not test_identifier:
                 continue
