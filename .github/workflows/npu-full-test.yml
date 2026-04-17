@@ -69,13 +69,10 @@ jobs:
           DISTRIBUTED_SHARDS=${{ inputs.distributed_shards || '10' }}
           REGULAR_SHARDS=${{ inputs.regular_shards || '40' }}
 
-          # TESTING: Limit to 2 shards for quick validation (remove after testing)
-          TEST_SHARDS_LIMIT=2
-
-          # Build distributed shard matrix (limited to TEST_SHARDS_LIMIT for testing)
-          DIST_SHARDS=$(seq 1 ${TEST_SHARDS_LIMIT} | tr '\n' ',' | sed 's/,$//')
-          # Build regular shard matrix (limited to TEST_SHARDS_LIMIT for testing)
-          REG_SHARDS=$(seq 1 ${TEST_SHARDS_LIMIT} | tr '\n' ',' | sed 's/,$//')
+          # Build distributed shard matrix
+          DIST_SHARDS=$(seq 1 ${DISTRIBUTED_SHARDS} | tr '\n' ',' | sed 's/,$//')
+          # Build regular shard matrix
+          REG_SHARDS=$(seq 1 ${REGULAR_SHARDS} | tr '\n' ',' | sed 's/,$//')
 
           echo "distributed_matrix=[${DIST_SHARDS}]" >> $GITHUB_OUTPUT
           echo "distributed_shards=${DISTRIBUTED_SHARDS}" >> $GITHUB_OUTPUT
@@ -83,9 +80,9 @@ jobs:
           echo "regular_matrix=[${REG_SHARDS}]" >> $GITHUB_OUTPUT
           echo "regular_shards=${REGULAR_SHARDS}" >> $GITHUB_OUTPUT
 
-          echo "Distributed tests: ${DISTRIBUTED_SHARDS} shards (matrix: ${DIST_SHARDS} - TESTING limited to ${TEST_SHARDS_LIMIT})"
-          echo "Regular tests: ${REGULAR_SHARDS} shards (matrix: ${REG_SHARDS} - TESTING limited to ${TEST_SHARDS_LIMIT})"
-          echo "Total shards configured: $((${DISTRIBUTED_SHARDS} + ${REGULAR_SHARDS})), executing: ${TEST_SHARDS_LIMIT} + ${TEST_SHARDS_LIMIT}"
+          echo "Distributed tests: ${DISTRIBUTED_SHARDS} shards (matrix: ${DIST_SHARDS})"
+          echo "Regular tests: ${REGULAR_SHARDS} shards (matrix: ${REG_SHARDS})"
+          echo "Total shards configured: $((${DISTRIBUTED_SHARDS} + ${REGULAR_SHARDS}))"
 
       - name: Clone PyTorch v${{ env.PYTORCH_VERSION }} (for test source)
         run: |
