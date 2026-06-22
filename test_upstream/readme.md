@@ -2,6 +2,7 @@
 
 ## 目录结构
 
+
 1. 核心仓库地址
    - [官方 PyTorch 仓库（v2.7.1 版本）](https://github.com/pytorch/pytorch/tree/v2.7.1)，需拉取该仓库并切换至 tags/v2.7.1 标签。
    - [补丁仓库（Ascend/pytorch）](https://gitcode.com/Ascend/pytorch)，仅需提取该仓库中的 patch 目录。
