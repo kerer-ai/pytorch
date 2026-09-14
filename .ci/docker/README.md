@@ -22,6 +22,7 @@
 .ci/docker/
 ├── README.md                      # 本文档
 ├── docker_build.sh                # 构建入口脚本
+├── requirements-builder.txt       # Builder 镜像公共 pip 依赖
 ├── common/                        # 公共共享脚本
 │   ├── install_cann.sh            # 安装 CANN toolkit (支持 A1/A2/A3，公开仓库或 OBS 分享链接)
 │   ├── install_triton.sh          # 安装 triton-ascend (需传 Python 版本)
