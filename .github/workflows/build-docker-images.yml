@@ -64,6 +64,9 @@ jobs:
         if: inputs.cann_share_url != ''
         run: |
           sudo bash .ci/docker/common/install_obs.sh
+          # Harden PATH in case /usr/local/bin is not present for step shells.
+          export PATH="/usr/local/bin:$PATH"
+          ls -la /usr/local/bin/obsutil
           obsutil version
 
       - name: Log in to SWR
@@ -79,6 +82,7 @@ jobs:
           OBS_SHARE_URL: ${{ inputs.cann_share_url }}
           OBS_ACCESS_CODE: ${{ inputs.cann_share_code }}
         run: |
+          export PATH="/usr/local/bin:$PATH"
           TIMESTAMP=$(date -u +%Y%m%d%H%M)
           cd .ci/docker
           chmod +x ./docker_build.sh
