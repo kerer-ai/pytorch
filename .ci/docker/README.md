@@ -24,7 +24,7 @@
 ├── docker_build.sh                # 构建入口脚本
 ├── requirements-builder.txt       # Builder 镜像公共 pip 依赖
 ├── common/                        # 公共共享脚本
-│   ├── install_cann.sh            # 安装 CANN toolkit (支持 A1/A2/A3，公开仓库或 OBS 分享链接)
+│   ├── install_cann.sh            # 安装 CANN toolkit (支持 A1/A2/A3/A5，公开仓库或 OBS 分享链接)
 │   ├── install_triton.sh          # 安装 triton-ascend (需传 Python 版本)
 │   ├── install_obs.sh             # 安装华为 OBS util (obsutil)
 │   └── obs_share.sh               # OBS 分享链接下载助手 (share-ls / share-cp 封装)
@@ -70,7 +70,7 @@ torch-npu-test-<ARCH>-cann<CHIP>-py<PYTHON_VERSION>-torch<PYTORCH_VERSION>-cann<
 |------|--------|
 | IMAGE_TYPE | builder, test |
 | ARCH | x86_64, aarch64 |
-| CHIP | A1 (Ascend 910), A2 (Ascend 910b), A3 (仅 test) |
+| CHIP | A1 (Ascend 910), A2 (Ascend 910b), A3 (Ascend A3), A5 (Ascend 950)，仅 test |
 | PYTHON_VERSION | 3.10 (仅 test) |
 | PYTORCH_VERSION | master (nightly) |
 | CANN_VERSION | 镜像内 CANN 版本，始终携带：公开仓库为固定版本（如 `cann9.1.0-beta.3`），OBS 分享链接为分享实际版本（如 `cann9.2.0-20260910200430`） |
@@ -137,4 +137,4 @@ OBS_ACCESS_CODE='<提取码>' \
 | `TAG_OUT=<file>` | docker_build.sh 将最终镜像 tag 写入该文件（workflow 用于回传） |
 
 分享目录约定为 `version_combo_snapshot/CANN <版本>/run/<arch>-linux/`，脚本按 `Ascend-cann-toolkit_*`、
-`Ascend-cann-{910\|910b\|A3}-ops_*`（按 CANN_CHIP）、`Ascend-cann-nnal_*` 三个模式挑选 run 包下载安装。
+`Ascend-cann-{910\|910b\|A3\|950}-ops_*`（按 CANN_CHIP: A1/A2/A3/A5）、`Ascend-cann-nnal_*` 三个模式挑选 run 包下载安装。

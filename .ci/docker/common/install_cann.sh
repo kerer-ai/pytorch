@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 # Install CANN toolkit for Ascend NPU.
 # Usage: CANN_CHIP=A1 ./install_cann.sh
-#   CANN_CHIP: A1 (Ascend 910), A2 (Ascend 910b), A3 (Ascend A3)
+#   CANN_CHIP: A1 (Ascend 910), A2 (Ascend 910b), A3 (Ascend A3), A5 (Ascend 950)
 #
 # CANN packages come from either of two sources:
 #   1. Public repo (default): fixed version downloaded from ascend-repo.
@@ -35,7 +35,8 @@ case "${CANN_CHIP}" in
   A1) OPS_PACKAGE="Ascend-cann-910-ops"  OPS_GLOB="Ascend-cann-910-ops*"  ;;
   A2) OPS_PACKAGE="Ascend-cann-910b-ops" OPS_GLOB="Ascend-cann-910b-ops*" ;;
   A3) OPS_PACKAGE="Ascend-cann-A3-ops"   OPS_GLOB="Ascend-cann-A3-ops*"   ;;
-  *)  echo "Unsupported CANN_CHIP: ${CANN_CHIP} (expected A1, A2 or A3)"; exit 1 ;;
+  A5) OPS_PACKAGE="Ascend-cann-950-ops"  OPS_GLOB="Ascend-cann-950-ops*"  ;;
+  *)  echo "Unsupported CANN_CHIP: ${CANN_CHIP} (expected A1, A2, A3 or A5)"; exit 1 ;;
 esac
 
 echo "Installing CANN ${CANN_CHIP} for ${ARCH}..."

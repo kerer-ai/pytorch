@@ -16,6 +16,7 @@
 #   ./docker_build.sh torch-npu-test-aarch64-cann-a2-py3.10-torch2.13.0
 #   ./docker_build.sh torch-npu-test-x86_64-cann-a1-py3.10-torch-master
 #   ./docker_build.sh torch-npu-test-aarch64-cann-a3-py3.10-torch-master
+#   ./docker_build.sh torch-npu-test-x86_64-cann-a5-py3.10-torch-master
 #
 # Environment variables (CANN from OBS share link, test images only):
 #   OBS_SHARE_URL    e-share link (with v2token); requires obsutil on PATH
@@ -128,6 +129,13 @@ case "$BASE_TAG" in
     PYTHON_VERSION=3.10
     VERSION_DIR=master
     ;;
+  torch-npu-test-x86_64-cann-a5-py3.10-torch-master)
+    IMAGE_TYPE=test
+    ARCH=x86_64
+    CANN_CHIP=A5
+    PYTHON_VERSION=3.10
+    VERSION_DIR=master
+    ;;
   torch-npu-test-aarch64-cann-a1-py3.10-torch-master)
     IMAGE_TYPE=test
     ARCH=aarch64
@@ -149,12 +157,19 @@ case "$BASE_TAG" in
     PYTHON_VERSION=3.10
     VERSION_DIR=master
     ;;
+  torch-npu-test-aarch64-cann-a5-py3.10-torch-master)
+    IMAGE_TYPE=test
+    ARCH=aarch64
+    CANN_CHIP=A5
+    PYTHON_VERSION=3.10
+    VERSION_DIR=master
+    ;;
   *)
     echo "ERROR: Unknown image tag: ${BASE_TAG}"
     echo ""
     echo "Supported tags:"
     echo "  Builder: torch-npu-builder-<x86_64|aarch64>-torch<2.13.0|master>"
-    echo "  Test:    torch-npu-test-<x86_64|aarch64>-cann-<a1|a2|a3>-py3.10-torch<2.13.0|master>"
+    echo "  Test:    torch-npu-test-<x86_64|aarch64>-cann-<a1|a2|a3|a5>-py3.10-torch<2.13.0|master>"
     exit 1
     ;;
 esac
