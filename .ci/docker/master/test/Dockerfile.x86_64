@@ -69,11 +69,17 @@ RUN curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download
         libsqlite=3.53.1 \
     && conda clean -ya
 
-# Install CANN and OBS
+# Install obsutil first (needed when CANN comes from an OBS share link)
 RUN chmod -R 755 /opt/buildtools/* \
     && dos2unix /opt/buildtools/* \
-    && /opt/buildtools/install_cann.sh \
     && /opt/buildtools/install_obs.sh
+
+# Install CANN: public repo by default; downloaded from the OBS share link
+# when the obs_share secret is provided at build time.
+ARG CANN_VERSION=
+RUN --mount=type=secret,id=obs_share \
+    if [ -f /run/secrets/obs_share ]; then set -a; . /run/secrets/obs_share; set +a; fi \
+    && /opt/buildtools/install_cann.sh
 
 # Install triton-ascend
 RUN /opt/buildtools/install_triton.sh ${PYTHON_VERSION}

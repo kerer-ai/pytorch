@@ -7,6 +7,14 @@ on:
         description: 'Single image tag to build (without timestamp). Leave empty to build all.'
         required: false
         type: string
+      cann_share_url:
+        description: 'OBS e-share link for CANN run packages (https://e-share.obs-website...?v2token=...). Leave empty to use the public CANN repo.'
+        required: false
+        type: string
+      cann_share_code:
+        description: 'Access code (提取码) for the OBS share link. Required when cann_share_url is set.'
+        required: false
+        type: string
 
 env:
   REGISTRY: swr.cn-north-4.myhuaweicloud.com
@@ -52,6 +60,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install obsutil for CANN share downloads
+        if: inputs.cann_share_url != ''
+        run: |
+          sudo bash .ci/docker/common/install_obs.sh
+          obsutil version
+
       - name: Log in to SWR
         if: env.PUSH_IMAGE == 'true'
         uses: docker/login-action@v3
@@ -61,14 +75,18 @@ jobs:
           password: ${{ secrets.SWR_PASSWORD }}
 
       - name: Build and push image
+        env:
+          OBS_SHARE_URL: ${{ inputs.cann_share_url }}
+          OBS_ACCESS_CODE: ${{ inputs.cann_share_code }}
         run: |
           TIMESTAMP=$(date -u +%Y%m%d%H%M)
           cd .ci/docker
           chmod +x ./docker_build.sh
-          TIMESTAMP=${TIMESTAMP} ./docker_build.sh ${{ matrix.tag }}
+          TIMESTAMP=${TIMESTAMP} TAG_OUT=/tmp/image_tag.txt ./docker_build.sh ${{ matrix.tag }}
 
-          COMMIT_ID=$(git rev-parse --short=8 HEAD)
-          IMAGE_TAG="${{ matrix.tag }}-${TIMESTAMP}-${COMMIT_ID}"
+          # docker_build.sh resolves the final tag (test images always carry
+          # a -cann<version> suffix).
+          IMAGE_TAG=$(cat /tmp/image_tag.txt)
           mkdir -p /tmp/result
           if [[ "${PUSH_IMAGE}" == "true" ]]; then
             REMOTE_IMAGE="${{ env.REGISTRY }}/${{ env.SWR_ORG }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
