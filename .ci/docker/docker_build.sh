@@ -98,13 +98,11 @@ case "$BASE_TAG" in
   torch-npu-builder-x86_64-torch-master)
     IMAGE_TYPE=builder
     ARCH=x86_64
-    PYTORCH_VERSION=2.14.0.dev20260708
     VERSION_DIR=master
     ;;
   torch-npu-builder-aarch64-torch-master)
     IMAGE_TYPE=builder
     ARCH=aarch64
-    PYTORCH_VERSION=2.14.0.dev20260708
     VERSION_DIR=master
     ;;
   # --- master (nightly) test ---

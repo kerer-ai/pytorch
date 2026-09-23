@@ -1,13 +1,11 @@
 FROM pytorch/manylinux2_28_aarch64-builder:cpu-aarch64
 
-ARG PYTORCH_VERSION=2.14.0.dev20260708
-
 ENV PATH=/usr/local/bin:$PATH
 ENV AUDITWHEEL_PLAT=manylinux_2_28_aarch64
 ENV ETCD_UNSUPPORTED_ARCH=arm64
-ENV PYTORCH_VERSION=${PYTORCH_VERSION}
 
 COPY requirements-builder.txt /opt/buildtools/
+COPY common/ /opt/buildtools/
 
 # Set pip & python symlinks (use /opt/python/cpXYZ-cpXYZ/ which is stable across patch versions)
 RUN cd /usr/local/bin \
@@ -24,18 +22,14 @@ RUN cd /usr/local/bin \
     && ln -sf /opt/python/cp314-cp314/bin/python3.14 python3.14 \
     && ln -sf /opt/python/cp310-cp310/bin/python3.10 python3
 
-# Install PyTorch from nightly source, then build requirements from PyPI for each python version
-RUN pip3.10 install --no-cache-dir --index-url https://download.pytorch.org/whl/nightly/cpu torch==${PYTORCH_VERSION} \
-        && pip3.10 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
-    && pip3.11 install --no-cache-dir --index-url https://download.pytorch.org/whl/nightly/cpu torch==${PYTORCH_VERSION} \
-        && pip3.11 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
-    && pip3.12 install --no-cache-dir --index-url https://download.pytorch.org/whl/nightly/cpu torch==${PYTORCH_VERSION} \
-        && pip3.12 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
-    && pip3.13 install --no-cache-dir --index-url https://download.pytorch.org/whl/nightly/cpu torch==${PYTORCH_VERSION} \
-        && pip3.13 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
-    && pip3.14 install --no-cache-dir --index-url https://download.pytorch.org/whl/nightly/cpu torch==${PYTORCH_VERSION} \
-        && pip3.14 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
-        && pip3.14 install --no-cache-dir auditwheel==5.4.0 \
+# Install build requirements from PyPI for each python version.
+# PyTorch/torchvision are NOT installed: CI builds them from source.
+RUN pip3.10 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
+    && pip3.11 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
+    && pip3.12 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
+    && pip3.13 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
+    && pip3.14 install --no-cache-dir -r /opt/buildtools/requirements-builder.txt \
+    && pip3.14 install --no-cache-dir auditwheel==5.4.0 \
     && ln -sf /opt/python/cp314-cp314/bin/auditwheel /usr/local/bin/auditwheel
 
 # Install system build tools
@@ -55,6 +49,11 @@ RUN echo "alias ll='ls -l --color=auto'" >> /root/.bashrc \
     && ccache --version \
     && yum update -y \
     && yum clean all
+
+# Install OBS util for wheels cache access in CI
+RUN chmod -R 755 /opt/buildtools/* \
+    && dos2unix /opt/buildtools/* \
+    && /opt/buildtools/install_obs.sh
 
 # Set timezone
 RUN rm -f /etc/localtime \
