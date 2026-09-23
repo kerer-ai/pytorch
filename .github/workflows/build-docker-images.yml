@@ -91,16 +91,17 @@ jobs:
           # docker_build.sh resolves the final tag (test images always carry
           # a -cann<version> suffix).
           IMAGE_TAG=$(cat /tmp/image_tag.txt)
+          IMAGE_SIZE=$(docker image inspect "${IMAGE_TAG}" --format '{{.Size}}')
           mkdir -p /tmp/result
           if [[ "${PUSH_IMAGE}" == "true" ]]; then
             REMOTE_IMAGE="${{ env.REGISTRY }}/${{ env.SWR_ORG }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
             docker tag "${IMAGE_TAG}" "${REMOTE_IMAGE}"
             docker push "${REMOTE_IMAGE}"
-            echo "${REMOTE_IMAGE}" > "/tmp/result/${{ matrix.tag }}.txt"
-            echo "Pushed ${REMOTE_IMAGE}"
+            echo "${REMOTE_IMAGE} ${IMAGE_SIZE}" > "/tmp/result/${{ matrix.tag }}.txt"
+            echo "Pushed ${REMOTE_IMAGE} ($(numfmt --to=iec-i --suffix=B ${IMAGE_SIZE} 2>/dev/null || echo ${IMAGE_SIZE}B))"
           else
             echo "Fork PR or no secrets — build only, skipping push"
-            echo "build-only: ${{ matrix.tag }}" > "/tmp/result/${{ matrix.tag }}.txt"
+            echo "build-only: ${{ matrix.tag }} ${IMAGE_SIZE}" > "/tmp/result/${{ matrix.tag }}.txt"
           fi
 
       - name: Upload result
@@ -127,18 +128,28 @@ jobs:
         run: |
           echo "## Docker Image Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| # | Image | Pull Command |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|-------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| # | Image | Size | Pull Command |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|-------|------|-------------|" >> $GITHUB_STEP_SUMMARY
 
           if [ -d /tmp/results ] && [ "$(ls -A /tmp/results 2>/dev/null)" ]; then
             COUNT=1
+            TOTAL_SIZE=0
             for f in /tmp/results/*.txt; do
-              IMAGE=$(cat "$f")
-              echo "| ${COUNT} | \`${IMAGE##*:}\` | \`docker pull ${IMAGE}\` |" >> $GITHUB_STEP_SUMMARY
+              IMAGE=$(awk '{print $1}' "$f")
+              SIZE=$(awk '{print $2}' "$f")
+              if [ -n "${SIZE}" ] && [ "${SIZE}" -eq "${SIZE}" ] 2>/dev/null; then
+                SIZE_HR=$(numfmt --to=iec-i --suffix=B "${SIZE}" 2>/dev/null || echo "${SIZE} B")
+                TOTAL_SIZE=$((TOTAL_SIZE + SIZE))
+              else
+                SIZE_HR="-"
+              fi
+              echo "| ${COUNT} | \`${IMAGE##*:}\` | ${SIZE_HR} | \`docker pull ${IMAGE}\` |" >> $GITHUB_STEP_SUMMARY
               COUNT=$((COUNT + 1))
             done
+            TOTAL_HR=$(numfmt --to=iec-i --suffix=B "${TOTAL_SIZE}" 2>/dev/null || echo "${TOTAL_SIZE} B")
+            echo "| | **Total ($((COUNT - 1)) images)** | **${TOTAL_HR}** | |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| - | No images built | - |" >> $GITHUB_STEP_SUMMARY
+            echo "| - | No images built | - | - |" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
