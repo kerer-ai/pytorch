@@ -3,10 +3,18 @@ name: Build build/test Docker Images
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Single image tag to build (without timestamp). Leave empty to build all.'
+      image_type:
+        description: 'Image type to build. x86_64 and aarch64 are always built together.'
         required: false
-        type: string
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - a1
+          - a2
+          - a3
+          - a5
+          - builder
       cann_share_url:
         description: 'OBS e-share link for CANN run packages (https://e-share.obs-website...?v2token=...). Leave empty to use the public CANN repo.'
         required: false
@@ -28,12 +36,24 @@ jobs:
       tags: ${{ steps.set.outputs.tags }}
     steps:
       - id: set
+        env:
+          IMAGE_TYPE: ${{ inputs.image_type || 'all' }}
         run: |
-          if [ -n "${{ inputs.tag }}" ]; then
-            TAGS='["${{ inputs.tag }}"]'
-          else
-            TAGS='["torch-npu-builder-x86_64-torch-master","torch-npu-builder-aarch64-torch-master","torch-npu-test-x86_64-cann-a1-py3.10-torch-master","torch-npu-test-x86_64-cann-a2-py3.10-torch-master","torch-npu-test-x86_64-cann-a3-py3.10-torch-master","torch-npu-test-x86_64-cann-a5-py3.10-torch-master","torch-npu-test-aarch64-cann-a1-py3.10-torch-master","torch-npu-test-aarch64-cann-a2-py3.10-torch-master","torch-npu-test-aarch64-cann-a3-py3.10-torch-master","torch-npu-test-aarch64-cann-a5-py3.10-torch-master"]'
-          fi
+          case "${IMAGE_TYPE}" in
+            all)
+              TAGS='["torch-npu-builder-x86_64-torch-master","torch-npu-builder-aarch64-torch-master","torch-npu-test-x86_64-cann-a1-py3.10-torch-master","torch-npu-test-x86_64-cann-a2-py3.10-torch-master","torch-npu-test-x86_64-cann-a3-py3.10-torch-master","torch-npu-test-x86_64-cann-a5-py3.10-torch-master","torch-npu-test-aarch64-cann-a1-py3.10-torch-master","torch-npu-test-aarch64-cann-a2-py3.10-torch-master","torch-npu-test-aarch64-cann-a3-py3.10-torch-master","torch-npu-test-aarch64-cann-a5-py3.10-torch-master"]'
+              ;;
+            builder)
+              TAGS='["torch-npu-builder-x86_64-torch-master","torch-npu-builder-aarch64-torch-master"]'
+              ;;
+            a1|a2|a3|a5)
+              TAGS="[\"torch-npu-test-x86_64-cann-${IMAGE_TYPE}-py3.10-torch-master\",\"torch-npu-test-aarch64-cann-${IMAGE_TYPE}-py3.10-torch-master\"]"
+              ;;
+            *)
+              echo "ERROR: unknown image type: ${IMAGE_TYPE}"
+              exit 1
+              ;;
+          esac
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
 
   build:
