@@ -14,9 +14,9 @@
 #   ./docker_build.sh torch-npu-builder-x86_64-torch2.13.0
 #   ./docker_build.sh torch-npu-builder-aarch64-torch-master
 #   ./docker_build.sh torch-npu-test-aarch64-cann-a2-py3.10-torch2.13.0
-#   ./docker_build.sh torch-npu-test-x86_64-cann-a1-py3.10-torch-master
-#   ./docker_build.sh torch-npu-test-aarch64-cann-a3-py3.10-torch-master
-#   ./docker_build.sh torch-npu-test-x86_64-cann-a5-py3.10-torch-master
+#   ./docker_build.sh torch-npu-test-x86_64-cann-a1-py3.11-torch-master
+#   ./docker_build.sh torch-npu-test-aarch64-cann-a3-py3.11-torch-master
+#   ./docker_build.sh torch-npu-test-x86_64-cann-a5-py3.11-torch-master
 #
 # Environment variables (CANN from OBS share link, test images only):
 #   OBS_SHARE_URL    e-share link (with v2token); requires obsutil on PATH
@@ -106,60 +106,60 @@ case "$BASE_TAG" in
     VERSION_DIR=master
     ;;
   # --- master (nightly) test ---
-  torch-npu-test-x86_64-cann-a1-py3.10-torch-master)
+  torch-npu-test-x86_64-cann-a1-py3.11-torch-master)
     IMAGE_TYPE=test
     ARCH=x86_64
     CANN_CHIP=A1
-    PYTHON_VERSION=3.10
+    PYTHON_VERSION=3.11
     VERSION_DIR=master
     ;;
-  torch-npu-test-x86_64-cann-a2-py3.10-torch-master)
+  torch-npu-test-x86_64-cann-a2-py3.11-torch-master)
     IMAGE_TYPE=test
     ARCH=x86_64
     CANN_CHIP=A2
-    PYTHON_VERSION=3.10
+    PYTHON_VERSION=3.11
     VERSION_DIR=master
     ;;
-  torch-npu-test-x86_64-cann-a3-py3.10-torch-master)
+  torch-npu-test-x86_64-cann-a3-py3.11-torch-master)
     IMAGE_TYPE=test
     ARCH=x86_64
     CANN_CHIP=A3
-    PYTHON_VERSION=3.10
+    PYTHON_VERSION=3.11
     VERSION_DIR=master
     ;;
-  torch-npu-test-x86_64-cann-a5-py3.10-torch-master)
+  torch-npu-test-x86_64-cann-a5-py3.11-torch-master)
     IMAGE_TYPE=test
     ARCH=x86_64
     CANN_CHIP=A5
-    PYTHON_VERSION=3.10
+    PYTHON_VERSION=3.11
     VERSION_DIR=master
     ;;
-  torch-npu-test-aarch64-cann-a1-py3.10-torch-master)
+  torch-npu-test-aarch64-cann-a1-py3.11-torch-master)
     IMAGE_TYPE=test
     ARCH=aarch64
     CANN_CHIP=A1
-    PYTHON_VERSION=3.10
+    PYTHON_VERSION=3.11
     VERSION_DIR=master
     ;;
-  torch-npu-test-aarch64-cann-a2-py3.10-torch-master)
+  torch-npu-test-aarch64-cann-a2-py3.11-torch-master)
     IMAGE_TYPE=test
     ARCH=aarch64
     CANN_CHIP=A2
-    PYTHON_VERSION=3.10
+    PYTHON_VERSION=3.11
     VERSION_DIR=master
     ;;
-  torch-npu-test-aarch64-cann-a3-py3.10-torch-master)
+  torch-npu-test-aarch64-cann-a3-py3.11-torch-master)
     IMAGE_TYPE=test
     ARCH=aarch64
     CANN_CHIP=A3
-    PYTHON_VERSION=3.10
+    PYTHON_VERSION=3.11
     VERSION_DIR=master
     ;;
-  torch-npu-test-aarch64-cann-a5-py3.10-torch-master)
+  torch-npu-test-aarch64-cann-a5-py3.11-torch-master)
     IMAGE_TYPE=test
     ARCH=aarch64
     CANN_CHIP=A5
-    PYTHON_VERSION=3.10
+    PYTHON_VERSION=3.11
     VERSION_DIR=master
     ;;
   *)
@@ -167,7 +167,7 @@ case "$BASE_TAG" in
     echo ""
     echo "Supported tags:"
     echo "  Builder: torch-npu-builder-<x86_64|aarch64>-torch<2.13.0|master>"
-    echo "  Test:    torch-npu-test-<x86_64|aarch64>-cann-<a1|a2|a3|a5>-py3.10-torch<2.13.0|master>"
+    echo "  Test:    torch-npu-test-<x86_64|aarch64>-cann-<a1|a2|a3|a5>-py<3.10|3.11>-torch<2.13.0|master>"
     exit 1
     ;;
 esac

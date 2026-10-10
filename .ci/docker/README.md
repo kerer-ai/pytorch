@@ -46,8 +46,8 @@
 ./docker_build.sh torch-npu-builder-aarch64-torch-master
 
 # Test 镜像 (含 CANN)
-./docker_build.sh torch-npu-test-x86_64-cann-a1-py3.10-torch-master
-./docker_build.sh torch-npu-test-aarch64-cann-a2-py3.10-torch-master
+./docker_build.sh torch-npu-test-x86_64-cann-a1-py3.11-torch-master
+./docker_build.sh torch-npu-test-aarch64-cann-a2-py3.11-torch-master
 ```
 
 ## Tag 命名规范
@@ -71,7 +71,7 @@ torch-npu-test-<ARCH>-cann<CHIP>-py<PYTHON_VERSION>-torch<PYTORCH_VERSION>-cann<
 | IMAGE_TYPE | builder, test |
 | ARCH | x86_64, aarch64 |
 | CHIP | A1 (Ascend 910), A2 (Ascend 910b), A3 (Ascend A3), A5 (Ascend 950)，仅 test |
-| PYTHON_VERSION | 3.10 (仅 test) |
+| PYTHON_VERSION | 3.11 (仅 test) |
 | PYTORCH_VERSION | master (nightly) |
 | CANN_VERSION | 镜像内 CANN 版本，始终携带：公开仓库为固定版本（如 `cann9.1.0-beta.3`），OBS 分享链接为分享实际版本（如 `cann9.2.0-20260910200430`） |
 
@@ -87,7 +87,7 @@ Builder 镜像支持以下 Python 版本（由基座镜像提供）：
 - Python 3.13
 - Python 3.14
 
-Test 镜像使用 Miniforge3 创建 conda 环境 `py_${PYTHON_VERSION}`（默认 Python 3.10）。
+Test 镜像使用 Miniforge3 创建 conda 环境 `py_${PYTHON_VERSION}`（默认 Python 3.11）。
 
 ## CANN 安装来源
 
@@ -123,7 +123,7 @@ sudo bash .ci/docker/common/install_obs.sh
 
 OBS_SHARE_URL='<e-share 链接>' \
 OBS_ACCESS_CODE='<提取码>' \
-  ./docker_build.sh torch-npu-test-x86_64-cann-a1-py3.10-torch-master
+  ./docker_build.sh torch-npu-test-x86_64-cann-a1-py3.11-torch-master
 ```
 
 ### 相关环境变量
