@@ -1,5 +1,7 @@
 # Python dependencies required for CI unit tests
-# Aligned with PyTorch upstream .ci/docker/requirements-ci.txt (CUDA 13.0 / py3.10 / jammy)
+# Aligned with PyTorch upstream .ci/docker/requirements-ci.txt (jammy);
+# numpy/numba/librosa use upstream's python_version markers (py3.11: numpy 1.26.4,
+# numba/librosa dropped because numba 0.57 requires numpy<1.25)
 # Note: torch-dependent packages (torchvision, torch_geometric, torch-scatter)
 #       are in requirements-post.txt, installed after PyTorch is built.
 
@@ -20,7 +22,8 @@ unittest-xml-reporting<=3.2.0,>=2.0.0
 mypy==1.16.0
 
 # Core scientific
-numpy==1.23.2
+numpy==1.23.2; python_version == "3.10"
+numpy==1.26.4; python_version >= "3.11"
 scipy==1.10.1
 opt-einsum==3.3
 sympy==1.13.3
@@ -48,8 +51,10 @@ transformers==4.36.2
 
 # Image / audio / ML
 scikit-image==0.22.0
-librosa>=0.6.2
-numba==0.57.1
+# numba 0.57 needs numpy<1.25, so upstream excludes numba (and librosa, which
+# depends on it) on py3.11 where numpy 1.26.4 is used
+librosa>=0.6.2; python_version < "3.11"
+numba==0.57.1; python_version == "3.10"
 tensorboard==2.13.0
 pywavelets==1.4.1
 
