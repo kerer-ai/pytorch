@@ -1,5 +1,8 @@
 numpy==1.26.4; python_version < "3.13"
 numpy>=2.1.0; python_version >= "3.13"
+# torchvision is a hard runtime dependency of the CI build flow; its
+# `import torchvision` check fails without Pillow (same pin as the test image)
+pillow==12.3.0
 pybind11==3.0.1
 nanobind>=2.9
 pyyaml==6.0.3
