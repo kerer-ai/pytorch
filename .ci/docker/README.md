@@ -26,6 +26,7 @@
 ├── common/                        # 公共共享脚本
 │   ├── install_cann.sh            # 安装 CANN toolkit (支持 A1/A2/A3/A5，公开仓库或 OBS 分享链接)
 │   ├── install_triton.sh          # 安装 triton-ascend (需传 Python 版本)
+│   ├── gen_image_report.sh        # 生成镜像版本报告 /image_report.txt (Dockerfile 最后一步)
 │   ├── install_obs.sh             # 安装华为 OBS util (obsutil)
 │   └── obs_share.sh               # OBS 分享链接下载助手 (share-ls / share-cp 封装)
 └── master/                        # master (nightly) 版本特定
@@ -95,6 +96,27 @@ Test 镜像使用 Miniforge3 创建 conda 环境 `py_${PYTHON_VERSION}`（默认
 |------|------|----------|
 | 公开仓库 (默认) | 不设置 OBS_SHARE_URL | 9.1.0-beta.3 (ascend-repo 固定版本，定义于 `common/install_cann.sh`) |
 | OBS 分享链接 | 设置 OBS_SHARE_URL + OBS_ACCESS_CODE | 由分享链接自动发现 (如 9.2.0-20260910200430) |
+
+## 镜像版本报告
+
+每个镜像构建的**最后一步**会生成版本报告，固定存放在镜像内 `/image_report.txt`，由
+`common/gen_image_report.sh` 生成（`docker_build.sh` 通过 `--build-arg IMAGE_TAG` 传入最终
+tag，使报告自描述）。内容包括：
+
+- 基础镜像、架构、OS 发行版、完整镜像 tag、生成时间
+- 核心组件版本：CANN 芯片与版本（来自 `install_cann.sh` 安装时写入的 stamp）、triton-ascend、
+  Python（test 镜像，conda 环境）
+- 工具版本：cmake、gcc、ninja、mold、ccache、auditwheel、obsutil 等
+- 完整 `pip freeze` 依赖清单（test 为 conda 环境；builder 为 cp310~cp314 全部 5 个 Python）
+
+查看方式（无需进入容器）：
+
+```bash
+docker run --rm <image> cat /image_report.txt
+```
+
+workflow 构建成功后会自动导出报告：artifact `result-<tag>` 内的 `<tag>-report.txt`，并在
+Summary 页新增 **Key Versions** 表格汇总各镜像的 CANN / triton / Python 版本。
 
 ## 从 OBS 分享链接构建（CANN 私享包）
 

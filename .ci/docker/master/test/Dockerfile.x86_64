@@ -2,6 +2,7 @@ FROM ubuntu:22.04
 
 ARG CANN_CHIP=A1
 ARG PYTHON_VERSION=3.11
+ARG IMAGE_TAG=
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
@@ -86,5 +87,8 @@ RUN /opt/buildtools/install_triton.sh ${PYTHON_VERSION}
 
 # Install base test requirements (no PyTorch-dependent packages; torch is built separately)
 RUN conda run -n py_${PYTHON_VERSION} pip install --no-cache-dir -r /opt/buildtools/requirements-test.txt
+
+# Generate the version report (base image, CANN/triton/Python versions, pip freeze)
+RUN BASE_IMAGE=ubuntu:22.04 /opt/buildtools/gen_image_report.sh test ${PYTHON_VERSION}
 
 WORKDIR /home

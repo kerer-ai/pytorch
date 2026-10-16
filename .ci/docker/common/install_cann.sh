@@ -134,5 +134,9 @@ echo "=== Installing CANN nnal ==="
 source /usr/local/Ascend/nnal/atb/set_env.sh
 echo "nnal install success"
 
+# Record the installed CANN version so the image version report
+# (common/gen_image_report.sh) reads the actually-installed version.
+echo "${CANN_VERSION}" > /usr/local/Ascend/cann/.installed_version
+
 rm -rf *
 echo "CANN ${CANN_CHIP} installation complete."
